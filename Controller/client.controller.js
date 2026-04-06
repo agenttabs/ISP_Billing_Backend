@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 
 
-const { addPPPoEUser, checkPPPoEUser, updatePPPoEUser, disconnectPPPoEUser } = require("../services/mikrotik");
+const { addPPPoEUser, checkPPPoEUser, updatePPPoEUser, addDisconnectScheduler, removeScheduler, upsertScheduler } = require("../services/mikrotik");
 
 
 
@@ -9,6 +9,18 @@ const { addPPPoEUser, checkPPPoEUser, updatePPPoEUser, disconnectPPPoEUser } = r
 exports.testAPI = (req, res) => {
   res.send("API WORKING");
 };
+
+//delay 2sec
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function run() {
+  console.log("Start");
+
+  await delay(3000);
+
+  console.log("After 2 seconds");
+}
+
 
 // ✅ GET CLIENTS
 exports.getClients = async (req, res) => {
@@ -83,25 +95,25 @@ exports.createClient = async (req, res) => {
       .collection("clients")
       .insertOne(data);
 
-    // ✅ CREATE PPP USER
-    await updatePPPoEUser({
-      oldUsername: oldClient.AccountName,
-      username: updateData.AccountName,
-      password: updateData.Password,
-      profile: updateData.Profile,
-      location: updateData.ServerLocation || oldClient.ServerLocation
+    // ✅ CREATE PPP USER (FIXED)
+    await addPPPoEUser({
+      username: data.AccountName,
+      password: data.Password,
+      profile: data.Profile,
+      location: data.ServerLocation
     });
 
-    // 🔥 FORCE APPLY PROFILE (IMPORTANT)
-    await disconnectPPPoEUser(
-      updateData.AccountName,
-      updateData.ServerLocation || oldClient.ServerLocation
-    );
+    await addDisconnectScheduler({
+      username: data.AccountName,
+      dueDate: data.DueDate,
+      location: data.ServerLocation
+    });
 
     res.json({
       _id: result.insertedId,
       ...data
     });
+
   } catch (err) {
     console.error("❌ CREATE ERROR:", err);
     res.status(500).json({ error: err.message });
@@ -140,6 +152,35 @@ exports.updateClient = async (req, res) => {
       profile: updateData.Profile,
       location: updateData.ServerLocation || oldClient.ServerLocation
     });
+
+    // 🔥 check if due date changed
+    const dueChanged = oldClient.DueDate !== updateData.DueDate;
+
+    if (dueChanged) {
+      console.log("📅 DueDate changed → updating scheduler");
+
+      // REMOVE OLD
+      await removeScheduler({
+        username: oldClient.AccountName,
+        location: oldClient.ServerLocation
+      });
+
+      // await upsertScheduler({
+      //   username: updateData.AccountName || oldClient.AccountName,
+      //   dueDate: updateData.DueDate,
+      //   location: updateData.ServerLocation || oldClient.ServerLocation
+      // });
+
+      // // CREATE NEW
+      if (updateData.AmountDue > 0) {
+        await addDisconnectScheduler({
+          username: updateData.AccountName || oldClient.AccountName,
+          dueDate: updateData.DueDate,
+          location: updateData.ServerLocation || oldClient.ServerLocation
+        });
+      }
+
+    }
 
     res.json({ message: "Client and PPP updated successfully" });
   } catch (err) {

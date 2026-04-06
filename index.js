@@ -36,6 +36,7 @@ app.use("/api/auth", authRoutes);
 //error handler
 app.use(errorHandler);
 
+
 // start server
 app.listen(5000, () => {
   console.log("🚀 Server running on http://localhost:5000");
