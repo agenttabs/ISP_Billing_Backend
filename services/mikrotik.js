@@ -2,10 +2,16 @@ const mongoose = require("mongoose");
 const { RouterOSClient } = require("routeros-client");
 
 // 🔥 GET SERVER FROM DB
-const getMikrotikConfig = async () => {
+const getMikrotikConfig = async (location) => {
     const db = mongoose.connection.db;
 
-    const server = await db.collection("Servers").findOne({}); // 🔥 ONE ROW ONLY
+    const servers = await mongoose.connection.db
+        .collection("network")
+        .find({ location: location })
+        .toArray();
+
+    // pick first
+    const server = servers[0];
 
     if (!server) {
         throw new Error("No MikroTik server found");
