@@ -20,9 +20,12 @@
     "express-rate-limit": "^8.3.2",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "mongodb": "^7.1.1",
     "mongoose": "^9.3.3",
     "morgan": "^1.10.1",
+    "nodemailer": "^8.0.5",
     "nodemon": "^3.1.14",
     "routeros-client": "^1.1.1",
     "sqlite3": "^6.0.1"

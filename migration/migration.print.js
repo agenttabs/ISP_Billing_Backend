@@ -1,14 +1,18 @@
 const mongoose = require("mongoose");
 const fs = require("fs");
+const collections = require("../config/collections");
+const { MONGO_URI, MONGOOSE_OPTIONS } = require("../config/mongo");
 
 // connect MongoDB
-mongoose.connect("mongodb://192.168.8.251:27017/isp_billing");
+mongoose.connect(MONGO_URI, MONGOOSE_OPTIONS);
 
 // flexible schema
 const schema = new mongoose.Schema({}, { strict: false });
 
 // collection: print
-const Print = mongoose.models.print || mongoose.model("print", schema, "print");
+const Print =
+  mongoose.models[collections.print] ||
+  mongoose.model(collections.print, schema, collections.print);
 
 // load JSON
 const data = JSON.parse(

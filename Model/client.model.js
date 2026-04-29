@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const collections = require("../config/collections");
 
 const clientSchema = new mongoose.Schema({
   accountName: String,
@@ -14,5 +15,7 @@ const clientSchema = new mongoose.Schema({
   createdAt: Date
 });
 
-module.exports = mongoose.model("clients", clientSchema);
+module.exports =
+  mongoose.models[collections.clients] ||
+  mongoose.model(collections.clients, clientSchema, collections.clients);
 

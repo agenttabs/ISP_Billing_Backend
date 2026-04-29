@@ -1,12 +1,16 @@
 const mongoose = require("mongoose");
 const fs = require("fs");
+const collections = require("../config/collections");
+const { MONGO_URI, MONGOOSE_OPTIONS } = require("../config/mongo");
 
 // connect MongoDB
-mongoose.connect("mongodb://192.168.8.251:27017/isp_billing");
+mongoose.connect(MONGO_URI, MONGOOSE_OPTIONS);
 
 // flexible schema (IMPORTANT)
 const clientSchema = new mongoose.Schema({}, { strict: false });
-const Client = mongoose.model("Client", clientSchema);
+const Client =
+  mongoose.models[collections.clients] ||
+  mongoose.model(collections.clients, clientSchema, collections.clients);
 
 // read JSON file
 const data = JSON.parse(fs.readFileSync("C:/Users/kitzibebe/Downloads/dbsys/client.json", "utf-8"));
