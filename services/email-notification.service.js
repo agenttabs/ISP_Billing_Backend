@@ -599,7 +599,7 @@ const sendBillingEmails = async ({ force = false, triggeredBy = "", manualClient
 
   const transporter = createTransport(config);
   const fromAddress = String(config.SmtpUser || "").trim();
-  const fromName = String(config.FromName || "DNS INTERNET").trim();
+  const fromName = String(config.FromName || "DNS NETWORKS").trim();
   let sent = 0;
   let skipped = 0;
   const errors = [];
