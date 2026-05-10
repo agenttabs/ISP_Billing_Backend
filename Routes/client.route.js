@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-const controller = require("../Controller/client.controller");
+const controller = require("../controller/client.controller");
 const { protect, authorize } = require("../middleware/auth.middleware");
 
 // test
@@ -78,3 +78,4 @@ router.get("/test-mikrotik", protect, authorize("ADMIN"), async (req, res) => {
   }
 });
 module.exports = router;
+
