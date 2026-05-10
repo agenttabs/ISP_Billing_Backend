@@ -33,6 +33,13 @@ router.get(
 );
 
 router.get(
+  "/dashboard/collections/:method",
+  protect,
+  authorize("ADMIN", "CASHIER"),
+  controller.getDashboardCollectionList
+);
+
+router.get(
   "/transactions",
   protect,
   authorize("ADMIN", "CASHIER"),
@@ -58,13 +65,6 @@ router.get(
   protect,
   authorize("ADMIN", "CASHIER"),
   controller.getNextPaymentReceiptNumber
-);
-
-router.post(
-  "/payments/validate-references",
-  protect,
-  authorize("ADMIN", "CASHIER"),
-  controller.validatePaymentReferences
 );
 
 router.post(

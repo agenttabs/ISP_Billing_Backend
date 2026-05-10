@@ -152,6 +152,99 @@ exports.me = async (req, res) => {
   return res.json({ user: req.user });
 };
 
+exports.changeMyPassword = async (req, res) => {
+  try {
+    const userId = String(req.user?.id || req.user?._id || "").trim();
+    const usernameFromToken = String(req.user?.username || "").trim().toLowerCase();
+    const currentPassword = String(req.body.currentPassword || "");
+    const newPassword = String(req.body.newPassword || "");
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        error: "Current password and new password are required."
+      });
+    }
+
+    if (newPassword.length < 4) {
+      return res.status(400).json({
+        error: "New password must be at least 4 characters."
+      });
+    }
+
+    const collection = getCredentialCollection();
+    const credentials = await loadCredentials();
+    const existingUser = credentials.find((item) => {
+      const itemId = String(item.ID || "").trim();
+      const itemUsername = String(item.Username || "").trim().toLowerCase();
+      return (userId && itemId === userId) || (usernameFromToken && itemUsername === usernameFromToken);
+    });
+
+    if (!existingUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    if (String(existingUser.Password || "") !== currentPassword) {
+      await writeAuditLog({
+        req,
+        actor: {
+          userId: existingUser.ID,
+          name: existingUser.Name,
+          username: existingUser.Username,
+          type: normalizeUserType(existingUser.Type),
+          loginAccount: existingUser.Username
+        },
+        module: "AUTH",
+        action: "CHANGE_PASSWORD",
+        targetType: "USER",
+        targetId: existingUser.ID,
+        accountName: existingUser.Username,
+        status: "FAILED",
+        summary: "Change password failed: invalid current password."
+      });
+
+      return res.status(400).json({ error: "Current password is incorrect." });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({
+        error: "New password must be different from the current password."
+      });
+    }
+
+    await collection.updateOne(
+      { ID: String(existingUser.ID || "") },
+      {
+        $set: {
+          Password: newPassword,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    await writeAuditLog({
+      req,
+      actor: {
+        userId: existingUser.ID,
+        name: existingUser.Name,
+        username: existingUser.Username,
+        type: normalizeUserType(existingUser.Type),
+        loginAccount: existingUser.Username
+      },
+      module: "AUTH",
+      action: "CHANGE_PASSWORD",
+      targetType: "USER",
+      targetId: existingUser.ID,
+      accountName: existingUser.Username,
+      status: "SUCCESS",
+      summary: "User changed their password."
+    });
+
+    return res.json({ message: "Password changed successfully." });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 exports.getUsers = async (_req, res) => {
   try {
     const credentials = (await loadCredentials()).map(sanitizeCredentialUser);

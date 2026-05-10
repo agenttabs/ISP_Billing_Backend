@@ -331,6 +331,141 @@ const getTopLevelPaymentFields = (row) => {
   };
 };
 
+const getDashboardActorFilter = (req) => {
+  const actorId = String(req.user?.id || req.user?._id || "").trim();
+  const actorName = String(req.user?.name || "").trim().toLowerCase();
+  const actorUsername = String(req.user?.username || "").trim().toLowerCase();
+  const actorType = String(req.user?.type || req.user?.role || "").trim().toUpperCase();
+
+  return (row) => {
+    const transactionDate = getEarningTransactionDateValue(row);
+    const { start, end } = getTodayRange();
+
+    if (!(transactionDate >= start && transactionDate <= end)) {
+      return false;
+    }
+
+    if (actorType === "ADMIN") {
+      return true;
+    }
+
+    const rowOwnerIds = [
+      row.DeclaredById,
+      row.CreatedById,
+      row.DoneById,
+      row.ReceivedById,
+      row.CollectedById,
+      row.UserId,
+      row.CashierId
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    const rowOwners = [
+      row.DeclaredBy,
+      row.CreatedBy,
+      row.DoneBy,
+      row.ReceivedBy,
+      row.CollectedBy,
+      row.Username,
+      row.UserName,
+      row.Cashier,
+      row.CashierName
+    ]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+
+    return rowOwnerIds.includes(actorId) || rowOwners.includes(actorName) || rowOwners.includes(actorUsername);
+  };
+};
+
+const getDashboardTodayEarnings = (earningsRows = [], req) => {
+  const actorFilter = getDashboardActorFilter(req);
+  return earningsRows.filter(actorFilter);
+};
+
+const accumulateDashboardPaymentTotals = (rows = []) => {
+  const paymentTotals = {
+    gcashPayment: 0,
+    paymayaPayment: 0,
+    bankPayment: 0,
+    cashPayment: 0,
+    gcashPaidClients: 0,
+    paymayaPaidClients: 0,
+    bankPaidClients: 0,
+    cashPaidClients: 0
+  };
+  const paidClientSets = {
+    GCASH: new Set(),
+    PAYMAYA: new Set(),
+    BANK: new Set(),
+    CASH: new Set()
+  };
+
+  rows.forEach((row) => {
+    const accountKey = normalizeAccountNumber(
+      row.AccountNumber || row.AccountName || row.ClientId || row._id
+    );
+
+    getPaymentBreakdownLines(row).forEach((line) => {
+      const amount = Number(line.Amount || 0);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return;
+      }
+
+      if (line.Method === "GCASH") {
+        paymentTotals.gcashPayment += amount;
+        if (accountKey) paidClientSets.GCASH.add(accountKey);
+      } else if (line.Method === "PAYMAYA") {
+        paymentTotals.paymayaPayment += amount;
+        if (accountKey) paidClientSets.PAYMAYA.add(accountKey);
+      } else if (line.Method === "BANK") {
+        paymentTotals.bankPayment += amount;
+        if (accountKey) paidClientSets.BANK.add(accountKey);
+      } else if (line.Method === "CASH") {
+        paymentTotals.cashPayment += amount;
+        if (accountKey) paidClientSets.CASH.add(accountKey);
+      }
+    });
+  });
+
+  paymentTotals.gcashPaidClients = paidClientSets.GCASH.size;
+  paymentTotals.paymayaPaidClients = paidClientSets.PAYMAYA.size;
+  paymentTotals.bankPaidClients = paidClientSets.BANK.size;
+  paymentTotals.cashPaidClients = paidClientSets.CASH.size;
+
+  return paymentTotals;
+};
+
+const buildDashboardCollectionRows = (rows = [], method) => {
+  const normalizedMethod = normalizePaymentMethod(method);
+
+  return rows
+    .map((row) => {
+      const matchingLines = getPaymentBreakdownLines(row).filter(
+        (line) => line.Method === normalizedMethod
+      );
+
+      if (!matchingLines.length) {
+        return null;
+      }
+
+      return {
+        rowId: String(row._id || row.Invoice || row.AccountNumber || Math.random()),
+        transactionDate: getEarningTransactionDateValue(row),
+        accountName: row.AccountName || "-",
+        clientName: row.ClientName || row.Name || row.Item || "-",
+        method: normalizedMethod,
+        reference: matchingLines.map((line) => line.Reference).filter(Boolean).join(", ") || "-",
+        receiptNumber: row.PaymentReceipt || row.Invoice || row.TransactionCode || "-",
+        amount: matchingLines.reduce((sum, line) => sum + Number(line.Amount || 0), 0),
+        createdBy: row.DeclaredBy || row.CreatedBy || row.Cashier || row.Username || "-"
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.transactionDate - a.transactionDate);
+};
+
 const formatPrDate = (date) => {
   const targetDate = new Date(date || Date.now());
   const year = String(targetDate.getFullYear()).slice(-2);
@@ -470,11 +605,11 @@ const enrichPrintHistoryRowWithEarning = (row, earningLookup) => {
   };
 };
 
-exports.getDashboardSummary = async (_req, res) => {
+exports.getDashboardSummary = async (req, res) => {
   try {
     const db = mongoose.connection.db;
     const clients = await db.collection(collections.clients).find({}).toArray();
-    const printRows = await db.collection(collections.print).find({}).toArray();
+    const earningsRows = await db.collection(collections.earnings).find({}).toArray();
 
     const activeClients = clients.filter((client) => !isDisconnectedClient(client));
     const pppoeCount = activeClients.filter(
@@ -483,60 +618,8 @@ exports.getDashboardSummary = async (_req, res) => {
     const ipoeCount = activeClients.filter(
       (client) => String(client.AuthenticationMode || "").toUpperCase() === "IPOE"
     ).length;
-    const { start, end } = getTodayRange();
-    const paymentTotals = {
-      gcashPayment: 0,
-      paymayaPayment: 0,
-      bankPayment: 0,
-      cashPayment: 0,
-      gcashPaidClients: 0,
-      paymayaPaidClients: 0,
-      bankPaidClients: 0,
-      cashPaidClients: 0
-    };
-    const paidClientSets = {
-      GCASH: new Set(),
-      PAYMAYA: new Set(),
-      BANK: new Set(),
-      CASH: new Set()
-    };
-
-    printRows
-      .filter((row) => {
-        const transactionDate = getTransactionDateValue(row);
-        return transactionDate >= start && transactionDate <= end;
-      })
-      .forEach((row) => {
-        const accountKey = normalizeAccountNumber(
-          row.AccountNumber || row.AccountName || row.ClientId || row._id
-        );
-
-        getPaymentBreakdownLines(row).forEach((line) => {
-          const amount = Number(line.Amount || 0);
-          if (!Number.isFinite(amount) || amount <= 0) {
-            return;
-          }
-
-          if (line.Method === "GCASH") {
-            paymentTotals.gcashPayment += amount;
-            if (accountKey) paidClientSets.GCASH.add(accountKey);
-          } else if (line.Method === "PAYMAYA") {
-            paymentTotals.paymayaPayment += amount;
-            if (accountKey) paidClientSets.PAYMAYA.add(accountKey);
-          } else if (line.Method === "BANK") {
-            paymentTotals.bankPayment += amount;
-            if (accountKey) paidClientSets.BANK.add(accountKey);
-          } else if (line.Method === "CASH") {
-            paymentTotals.cashPayment += amount;
-            if (accountKey) paidClientSets.CASH.add(accountKey);
-          }
-        });
-      });
-
-    paymentTotals.gcashPaidClients = paidClientSets.GCASH.size;
-    paymentTotals.paymayaPaidClients = paidClientSets.PAYMAYA.size;
-    paymentTotals.bankPaidClients = paidClientSets.BANK.size;
-    paymentTotals.cashPaidClients = paidClientSets.CASH.size;
+    const dashboardRows = getDashboardTodayEarnings(earningsRows, req);
+    const paymentTotals = accumulateDashboardPaymentTotals(dashboardRows);
 
     res.json({
       activeClients: activeClients.length,
@@ -547,6 +630,30 @@ exports.getDashboardSummary = async (_req, res) => {
       dueToday: getDueTodayRows(clients).length,
       pastDueUnpaid: getPastDueUnpaidRows(clients).length,
       ...paymentTotals
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getDashboardCollectionList = async (req, res) => {
+  try {
+    const method = normalizePaymentMethod(req.params.method);
+    if (!["GCASH", "PAYMAYA", "BANK", "CASH"].includes(method)) {
+      return res.status(400).json({ error: "Invalid collection method." });
+    }
+
+    const earningsRows = await mongoose.connection.db
+      .collection(collections.earnings)
+      .find({})
+      .toArray();
+
+    const dashboardRows = getDashboardTodayEarnings(earningsRows, req);
+    const rows = buildDashboardCollectionRows(dashboardRows, method);
+
+    res.json({
+      total: rows.length,
+      rows
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -862,141 +969,90 @@ exports.getNextPaymentReceiptNumber = async (req, res) => {
       return res.status(400).json({ error: "Invalid payment date." });
     }
 
-      const db = mongoose.connection.db;
-      const transactions = await db.collection(collections.print).find({}).toArray();
-      const earnings = await db.collection(collections.earnings).find({}).toArray();
-      const datePart = formatPrDate(requestedDate);
-      const nextNumber = getNextAvailablePrNumberFromRows(
-        [...transactions, ...earnings],
-        datePart
-      );
+    const db = mongoose.connection.db;
+    const printCollection = db.collection(collections.print);
+    const earningsCollection = db.collection(collections.earnings);
+    const datePart = formatPrDate(requestedDate);
+    const receiptPrefix = `PR-${datePart}-`;
+    const invoicePrefix = `SI-${datePart}-`;
 
-      res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-      res.set("Pragma", "no-cache");
-      res.set("Expires", "0");
-      res.json({ receiptNumber: nextNumber });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    const [printLatest, earningsLatest] = await Promise.all([
+      printCollection
+        .find(
+          { PaymentReceipt: { $regex: `^${receiptPrefix}` } },
+          { projection: { PaymentReceipt: 1 } }
+        )
+        .sort({ PaymentReceipt: -1 })
+        .limit(1)
+        .toArray(),
+      earningsCollection
+        .find(
+          { Invoice: { $regex: `^${invoicePrefix}` } },
+          { projection: { Invoice: 1 } }
+        )
+        .sort({ Invoice: -1 })
+        .limit(1)
+        .toArray(),
+    ]);
+
+    const extractSuffix = (value, prefix) => {
+      const raw = String(value || "").trim().toUpperCase();
+      const normalizedPrefix = String(prefix || "").toUpperCase();
+
+      if (!raw.startsWith(normalizedPrefix)) {
+        return 0;
+      }
+
+      const suffix = Number.parseInt(raw.slice(normalizedPrefix.length), 10);
+      return Number.isFinite(suffix) ? suffix : 0;
+    };
+
+    const maxSuffix = Math.max(
+      extractSuffix(printLatest[0]?.PaymentReceipt, receiptPrefix),
+      extractSuffix(earningsLatest[0]?.Invoice, invoicePrefix)
+    );
+
+    let nextSuffix = maxSuffix + 1;
+    let nextNumber = null;
+
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const paddedSuffix = String(nextSuffix).padStart(4, "0");
+      const receiptNumber = `PR-${datePart}-${paddedSuffix}`;
+      const invoiceNumber = `SI-${datePart}-${paddedSuffix}`;
+
+      const [printMatch, earningMatch] = await Promise.all([
+        printCollection.findOne({
+          $or: [
+            { PaymentReceipt: receiptNumber },
+            { Invoice: invoiceNumber },
+            { TransactionCode: receiptNumber },
+          ],
+        }),
+        earningsCollection.findOne({ Invoice: invoiceNumber }),
+      ]);
+
+      if (!printMatch && !earningMatch) {
+        nextNumber = receiptNumber;
+        break;
+      }
+
+      nextSuffix += 1;
     }
-  };
 
-exports.validatePaymentReferences = async (req, res) => {
-  try {
-    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
-
-    if (!entries.length) {
-      return res.json({
-        valid: true,
-        refs: []
+    if (!nextNumber) {
+      return res.status(503).json({
+        error: "Unable to generate a unique payment reference right now. Please try again.",
       });
     }
 
-    const normalizedEntries = entries
-      .map((entry) => ({
-        method: normalizePaymentMethod(entry?.method),
-        amount: Number(entry?.amount || 0),
-        reference: normalizeReferenceValue(entry?.reference),
-        receiptAmount: Number(entry?.receiptAmount || entry?.amount || 0)
-      }))
-      .filter((entry) => entry.method && entry.method !== "CASH" && entry.amount > 0 && entry.reference);
-
-    if (!normalizedEntries.length) {
-      return res.json({
-        valid: true,
-        refs: []
-      });
-    }
-
-    const rows = await mongoose.connection.db
-      .collection(collections.print)
-      .find({ Type: "Payment" })
-      .toArray();
-
-    const existingUsageByRef = new Map();
-    const maxReceiptAmountByRef = new Map();
-    const existingAccountsByRef = new Map();
-
-    rows.forEach((row) => {
-      getPaymentBreakdownLines(row)
-        .filter((line) => line.Method !== "CASH" && line.Reference)
-        .forEach((line) => {
-          const currentUsed = existingUsageByRef.get(line.Reference) || 0;
-          existingUsageByRef.set(line.Reference, currentUsed + Number(line.Amount || 0));
-
-          const currentMax = maxReceiptAmountByRef.get(line.Reference) || 0;
-          maxReceiptAmountByRef.set(
-            line.Reference,
-            Math.max(currentMax, Number(line.ReceiptAmount || line.Amount || 0))
-          );
-
-          const existingAccounts = existingAccountsByRef.get(line.Reference) || new Set();
-          const accountName = String(
-            row?.AccountName || row?.ClientName || row?.AccountNumber || ""
-          ).trim();
-
-          if (accountName) {
-            existingAccounts.add(accountName);
-          }
-
-          existingAccountsByRef.set(line.Reference, existingAccounts);
-        });
-    });
-
-    const requestTotalsByRef = new Map();
-    normalizedEntries.forEach((entry) => {
-      requestTotalsByRef.set(
-        entry.reference,
-        (requestTotalsByRef.get(entry.reference) || 0) + entry.amount
-      );
-
-      const currentMax = maxReceiptAmountByRef.get(entry.reference) || 0;
-      maxReceiptAmountByRef.set(
-        entry.reference,
-        Math.max(currentMax, Number(entry.receiptAmount || entry.amount || 0))
-      );
-    });
-
-    const results = [...requestTotalsByRef.entries()].map(([reference, requestedAmount]) => {
-      const usedAmount = Number(existingUsageByRef.get(reference) || 0);
-      const receiptAmount = Number(maxReceiptAmountByRef.get(reference) || requestedAmount || 0);
-      const combinedAmount = usedAmount + requestedAmount;
-      const exceeds = combinedAmount > receiptAmount;
-
-      return {
-        reference,
-        usedAmount,
-        requestedAmount,
-        receiptAmount,
-        combinedAmount,
-        exceeds,
-        remainingAmount: Math.max(receiptAmount - usedAmount, 0),
-        usedByAccounts: [...(existingAccountsByRef.get(reference) || new Set())]
-      };
-    });
-
-    const exceeded = results.find((item) => item.exceeds);
-
-    if (exceeded) {
-      const usedByText = exceeded.usedByAccounts?.length
-        ? ` Used by account(s): ${exceeded.usedByAccounts.join(", ")}.`
-        : "";
-
-      return res.status(400).json({
-        error: `Reference ${exceeded.reference} exceeds the receipt amount. Used: ${exceeded.usedAmount.toFixed(2)}, current: ${exceeded.requestedAmount.toFixed(2)}, receipt: ${exceeded.receiptAmount.toFixed(2)}.${usedByText}`,
-        valid: false,
-        refs: results
-      });
-    }
-
-    res.json({
-      valid: true,
-      refs: results
-    });
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    res.json({ receiptNumber: nextNumber });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
-
 exports.validatePaymentDocuments = async (req, res) => {
   try {
     const paymentReceipt = String(req.body?.paymentReceipt || "").trim();

@@ -16,7 +16,7 @@ const Print =
 
 // load JSON
 const data = JSON.parse(
-  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/05092026/print.json", "utf-8")
+  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/updated/print.json", "utf-8")
 );
 
 // 🔥 force convert to Date
@@ -44,7 +44,8 @@ async function migrate() {
     const formatted = data.map(convert);
      
     console.log("Clearing existing print...");
-    await Client.deleteMany({});print cleared");
+    await Print.deleteMany({});
+    console.log("print cleared");
     await Print.insertMany(formatted);
     await Print.collection.createIndex({ PaymentReceipt: 1 });
     await Print.collection.createIndex({ Invoice: 1 });

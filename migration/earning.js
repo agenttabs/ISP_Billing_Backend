@@ -11,7 +11,7 @@ const Earning =
   mongoose.model(collections.earnings, earningSchema, collections.earnings);
 
 const data = JSON.parse(
-  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/05092026/Earnings.json", "utf-8")
+  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/updated/Earnings.json", "utf-8")
 );
 
 function parseDate(value) {

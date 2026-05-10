@@ -14,7 +14,7 @@ const Client =
 
 // read JSON
 const data = JSON.parse(
-  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/05092026/client.json", "utf-8")
+  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/updated/client.json", "utf-8")
 );
 
 // 🔥 DATE PARSER
