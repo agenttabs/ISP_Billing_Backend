@@ -279,7 +279,10 @@ const getPaymentBreakdownLines = (row) => {
         Method: normalizePaymentMethod(line?.Method || line?.PaymentMethod),
         Amount: Number(line?.Amount || 0),
         Reference: normalizeReferenceValue(line?.Reference),
-        ReceiptAmount: Number(line?.ReceiptAmount || line?.Amount || 0)
+        ReceiptAmount: Number(line?.ReceiptAmount || line?.Amount || 0),
+        TransferDate: normalizeCommentValue(
+          line?.TransferDate || line?.DateOfTransfer || line?.GCashTransferDate || row?.TransferDate || row?.GCashTransferDate
+        )
       }))
       .filter((line) => line.Method && line.Amount > 0);
   }
@@ -299,7 +302,11 @@ const getPaymentBreakdownLines = (row) => {
           : normalizeReferenceValue(
               row?.MOPRef || row?.ReferenceNumber || row?.TransactionCode || ""
             ),
-      ReceiptAmount: Number(row?.ReceiptAmount || row?.TotalAmount || row?.Cash || 0)
+      ReceiptAmount: Number(row?.ReceiptAmount || row?.TotalAmount || row?.Cash || 0),
+      TransferDate:
+        paymentMethod === "CASH"
+          ? ""
+          : normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate)
     }
   ].filter((line) => line.Amount > 0);
 };
@@ -311,6 +318,13 @@ const getTopLevelPaymentFields = (row) => {
     .filter((line) => line.Method !== "CASH" && line.Reference)
     .map((line) => line.Reference);
   const uniqueNonCashReferences = [...new Set(nonCashReferences)];
+
+  const nonCashTransferDates = [...new Set(
+    paymentBreakdown
+      .filter((line) => line.Method !== "CASH" && line.TransferDate)
+      .map((line) => normalizeCommentValue(line.TransferDate))
+      .filter(Boolean)
+  )];
 
   return {
     PaymentBreakdown: paymentBreakdown,
@@ -327,7 +341,15 @@ const getTopLevelPaymentFields = (row) => {
     MOPRef:
       uniqueNonCashReferences.length === 1
         ? uniqueNonCashReferences[0]
-        : ""
+        : "",
+    TransferDate:
+      nonCashTransferDates.length === 1
+        ? nonCashTransferDates[0]
+        : normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate),
+    GCashTransferDate:
+      nonCashTransferDates.length === 1
+        ? nonCashTransferDates[0]
+        : normalizeCommentValue(row?.GCashTransferDate || row?.TransferDate)
   };
 };
 
@@ -453,6 +475,13 @@ const buildDashboardCollectionRows = (rows = [], method) => {
       return {
         rowId: String(row._id || row.Invoice || row.AccountNumber || Math.random()),
         transactionDate: getEarningTransactionDateValue(row),
+        transferDate:
+          matchingLines
+            .map((line) => normalizeCommentValue(line.TransferDate))
+            .filter(Boolean)
+            .join(", ") ||
+          normalizeCommentValue(row.TransferDate || row.GCashTransferDate) ||
+          "",
         accountName: row.AccountName || "-",
         clientName: row.ClientName || row.Name || row.Item || "-",
         method: normalizedMethod,
