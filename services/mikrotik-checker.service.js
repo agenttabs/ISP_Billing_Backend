@@ -26,8 +26,11 @@ const normalizePlanString = (value) =>
 
 const extractIpoeCommentName = (comment) => {
   const match = String(comment || "").match(/NAME=([^;]+)/i);
-  return normalizeText(match?.[1] || "");
+  return String(match?.[1] || "").trim();
 };
+
+const normalizeIpoeCommentName = (comment) =>
+  normalizeText(extractIpoeCommentName(comment));
 
 const extractIpoeCommentPlan = (comment) => {
   const match = String(comment || "").match(/PLAN=([^;]+)/i);
@@ -359,7 +362,7 @@ const generateMikrotikCheckerReport = async () => {
   });
 
   const dhcpLeases = (snapshot?.dhcpLeases || []).filter((row) => {
-    const accountName = extractIpoeCommentName(row?.comment);
+    const accountName = normalizeIpoeCommentName(row?.comment);
     const plan = extractIpoeCommentPlan(row?.comment);
     return Boolean(accountName) && !isDisconnectedValue(plan);
   });
@@ -368,7 +371,7 @@ const generateMikrotikCheckerReport = async () => {
   const dhcpLeaseMap = new Map();
 
   for (const row of dhcpLeases) {
-    const accountName = extractIpoeCommentName(row?.comment);
+    const accountName = normalizeIpoeCommentName(row?.comment);
     if (accountName && !dhcpLeaseMap.has(accountName)) {
       dhcpLeaseMap.set(accountName, row);
     }
@@ -473,7 +476,7 @@ const generateMikrotikCheckerReport = async () => {
   }
 
   for (const lease of dhcpLeases) {
-    const accountNameKey = extractIpoeCommentName(lease.comment);
+    const accountNameKey = normalizeIpoeCommentName(lease.comment);
     if (!accountNameKey || systemIpoeNameMap.has(accountNameKey)) {
       continue;
     }
@@ -482,7 +485,7 @@ const generateMikrotikCheckerReport = async () => {
       createIssueRow({
         issueType: "NOT_FOUND_IN_SYSTEM",
         authMode: "IPOE",
-        accountName: accountNameKey,
+        accountName: extractIpoeCommentName(lease.comment),
         mikrotikPlan: extractIpoeCommentPlan(lease.comment) || "-",
         mikrotikMacAddress: lease["mac-address"] || lease.macAddress || "",
         detail: "IPOE lease exists in MikroTik but not in the system."

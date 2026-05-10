@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const nodemailer = require("nodemailer");
 const collections = require("../config/collections");
 const {
   updatePPPoEUser,
@@ -26,6 +27,7 @@ const defaultMikrotikDueDisconnectBatchConfig = () => ({
     Number.isFinite(DEFAULT_GRACE_DAYS) && DEFAULT_GRACE_DAYS >= 0
       ? DEFAULT_GRACE_DAYS
       : 15,
+  RecipientEmail: "",
   IsActive: false,
   DisconnectedPlanName: DEFAULT_DISCONNECTED_PLAN,
   LastRunKey: "",
@@ -44,6 +46,7 @@ const sanitizeConfig = (config) => {
     Name: String(config?.Name || defaults.Name).trim() || defaults.Name,
     SendTime: String(config?.SendTime || defaults.SendTime).trim() || defaults.SendTime,
     GraceDays: Number.isFinite(graceDays) && graceDays >= 0 ? graceDays : defaults.GraceDays,
+    RecipientEmail: String(config?.RecipientEmail || defaults.RecipientEmail).trim(),
     IsActive: Boolean(config?.IsActive),
     DisconnectedPlanName:
       String(config?.DisconnectedPlanName || defaults.DisconnectedPlanName).trim() ||

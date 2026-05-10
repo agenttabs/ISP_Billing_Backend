@@ -28,6 +28,11 @@ exports.saveMikrotikDcBatchConfig = async (req, res) => {
       SendTime: String(
         req.body.SendTime || existing.SendTime || defaultMikrotikDcBatchConfig().SendTime
       ).trim(),
+      GraceDays: Number(
+        req.body.GraceDays ??
+          existing.GraceDays ??
+          defaultMikrotikDcBatchConfig().GraceDays
+      ),
       DisconnectedPlanName: String(
         req.body.DisconnectedPlanName ||
           existing.DisconnectedPlanName ||
@@ -76,7 +81,14 @@ exports.saveMikrotikDcBatchConfig = async (req, res) => {
 
 exports.previewMikrotikDcBatch = async (req, res) => {
   try {
-    const report = await generateMikrotikDcBatchReport({ applyChanges: false });
+    const report = await generateMikrotikDcBatchReport({
+      applyChanges: false,
+      configOverrides: {
+        SendTime: req.query.SendTime,
+        GraceDays: req.query.GraceDays,
+        DisconnectedPlanName: req.query.DisconnectedPlanName
+      }
+    });
 
     await writeAuditLog({
       req,
@@ -104,7 +116,12 @@ exports.runMikrotikDcBatchNow = async (req, res) => {
     ).trim();
     const report = await generateMikrotikDcBatchReport({
       applyChanges: true,
-      triggeredBy
+      triggeredBy,
+      configOverrides: {
+        SendTime: req.body?.SendTime,
+        GraceDays: req.body?.GraceDays,
+        DisconnectedPlanName: req.body?.DisconnectedPlanName
+      }
     });
     const config = await getConfigDocument();
 

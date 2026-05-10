@@ -1,11 +1,16 @@
 const mongoose = require("mongoose");
 const collections = require("../config/collections");
-const { getMikrotikCheckerSnapshot } = require("./mikrotik");
+const {
+  setPPPoESecretDisconnected,
+  setIpoeLeaseStatic
+} = require("./mikrotik");
 const { writeAuditLog } = require("./audit-log.service");
 
 const MANILA_TIMEZONE = "Asia/Manila";
-const PPP_DISCONNECTED_PROFILE = "DC-PUTOL";
+const PPP_DISCONNECTED_PROFILE = "dc-putol";
 const DEFAULT_DISCONNECTED_PLAN = "disconnection";
+const DEFAULT_GRACE_DAYS = Number(process.env.DISCONNECT_AFTER_DAYS || 15);
+const OVERDUE_ACCUMULATE_THRESHOLD = 15;
 
 const normalizeText = (value) =>
   String(value || "")
@@ -17,6 +22,10 @@ const getCollection = (name) => mongoose.connection.db.collection(name);
 const defaultMikrotikDcBatchConfig = () => ({
   Name: "Mikrotik DC Batch",
   SendTime: "09:00",
+  GraceDays:
+    Number.isFinite(DEFAULT_GRACE_DAYS) && DEFAULT_GRACE_DAYS >= 0
+      ? DEFAULT_GRACE_DAYS
+      : 15,
   IsActive: false,
   DisconnectedPlanName: DEFAULT_DISCONNECTED_PLAN,
   LastRunKey: "",
@@ -27,12 +36,14 @@ const defaultMikrotikDcBatchConfig = () => ({
 
 const sanitizeConfig = (config) => {
   const defaults = defaultMikrotikDcBatchConfig();
+  const graceDays = Number(config?.GraceDays ?? defaults.GraceDays);
 
   return {
     ...defaults,
     ...(config || {}),
     Name: String(config?.Name || defaults.Name).trim() || defaults.Name,
     SendTime: String(config?.SendTime || defaults.SendTime).trim() || defaults.SendTime,
+    GraceDays: Number.isFinite(graceDays) && graceDays >= 0 ? graceDays : defaults.GraceDays,
     IsActive: Boolean(config?.IsActive),
     DisconnectedPlanName:
       String(config?.DisconnectedPlanName || defaults.DisconnectedPlanName).trim() ||
@@ -80,16 +91,6 @@ const updateRunSummary = async (values = {}) => {
   return nextConfig;
 };
 
-const extractIpoeCommentName = (comment) => {
-  const match = String(comment || "").match(/NAME=([^;]+)/i);
-  return normalizeText(match?.[1] || "");
-};
-
-const extractIpoeCommentPlan = (comment) => {
-  const match = String(comment || "").match(/PLAN=([^;]+)/i);
-  return normalizeText(match?.[1] || "");
-};
-
 const isSystemDisconnected = (client) => {
   const values = [
     client?.Status,
@@ -106,38 +107,6 @@ const isSystemDisconnected = (client) => {
       normalized === "0M/0M"
     );
   });
-};
-
-const buildSnapshotIndexes = (snapshot) => {
-  const pppByName = new Map();
-  const leaseByMac = new Map();
-  const leaseByAccount = new Map();
-
-  for (const secret of snapshot?.pppSecrets || []) {
-    const name = normalizeText(secret?.name || secret?.Name);
-    if (name) {
-      pppByName.set(name, secret);
-    }
-  }
-
-  for (const lease of snapshot?.dhcpLeases || []) {
-    const macAddress = normalizeText(lease?.["mac-address"] || lease?.macAddress);
-    const accountName = extractIpoeCommentName(lease?.comment);
-
-    if (macAddress) {
-      leaseByMac.set(macAddress, lease);
-    }
-
-    if (accountName && !leaseByAccount.has(accountName)) {
-      leaseByAccount.set(accountName, lease);
-    }
-  }
-
-  return {
-    pppByName,
-    leaseByMac,
-    leaseByAccount
-  };
 };
 
 const buildRow = ({
@@ -193,6 +162,60 @@ const getManilaDateKey = (date = new Date()) => {
   return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
 };
 
+const formatDateOnlyUtc = (date) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return "-";
+  }
+
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0")
+  ].join("-");
+};
+
+const getManilaTodayStart = () => {
+  const parts = getManilaDateParts(new Date());
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+};
+
+const parseDateOnly = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+};
+
+const addDaysUtc = (date, days) => {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+};
+
+const isUnpaidClient = (client) => {
+  const paymentStatus = normalizeText(client?.PaymentStatus);
+  const amountDue = Number(client?.AmountDue ?? 0);
+
+  if (paymentStatus && paymentStatus !== "PAID") {
+    return true;
+  }
+
+  return Number.isFinite(amountDue) && amountDue > 0;
+};
+
+const formatDisconnectRemark = (date = new Date()) => {
+  const parts = getManilaDateParts(date);
+  const dateKey = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+  const timeKey = `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")}`;
+  return `Disconnected by DC Batch on ${dateKey} ${timeKey}`;
+};
+
 const getMinutesFromTimeKey = (value) => {
   const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
 
@@ -217,22 +240,81 @@ const getMinutesFromTimeKey = (value) => {
   return hours * 60 + minutes;
 };
 
-const generateMikrotikDcBatchReport = async ({ applyChanges = false, triggeredBy = "" } = {}) => {
-  const config = await getConfigDocument();
+const isBypassClient = (client, bypassAccountKeys, bypassClientIds) => {
+  const accountKey = normalizeText(client?.AccountName);
+  const clientId = String(client?._id || "").trim();
+  return (accountKey && bypassAccountKeys.has(accountKey)) || (clientId && bypassClientIds.has(clientId));
+};
+
+const getPlanPrice = (plan) => Number(plan?.Price ?? plan?.price ?? 0);
+const getPlanName = (plan) => String(plan?.Name ?? plan?.name ?? "").trim();
+const getPlanSpeed = (plan) => String(plan?.Speed ?? plan?.speed ?? "").trim();
+
+const resolveDisconnectedAmountDue = (netPlans, planValue, fallbackAmount) => {
+  const normalizedPlanValue = String(planValue || "").trim().toUpperCase();
+
+  if (!normalizedPlanValue) {
+    return fallbackAmount;
+  }
+
+  const matchedPlan = (netPlans || []).find((plan) => {
+    const planName = getPlanName(plan).toUpperCase();
+    const planSpeed = getPlanSpeed(plan).toUpperCase();
+    return planName === normalizedPlanValue || planSpeed === normalizedPlanValue;
+  });
+
+  if (!matchedPlan) {
+    return fallbackAmount;
+  }
+
+  const amount = getPlanPrice(matchedPlan);
+  return Number.isFinite(amount) ? amount : fallbackAmount;
+};
+
+const generateMikrotikDcBatchReport = async ({
+  applyChanges = false,
+  triggeredBy = "",
+  configOverrides = {}
+} = {}) => {
+  const storedConfig = await getConfigDocument();
+  const config = sanitizeConfig({
+    ...storedConfig,
+    ...(configOverrides || {})
+  });
   const disconnectedPlanName =
     String(config.DisconnectedPlanName || DEFAULT_DISCONNECTED_PLAN).trim() ||
     DEFAULT_DISCONNECTED_PLAN;
+  const graceDays =
+    Number.isFinite(Number(config.GraceDays)) && Number(config.GraceDays) >= 0
+      ? Number(config.GraceDays)
+      : Number.isFinite(DEFAULT_GRACE_DAYS) && DEFAULT_GRACE_DAYS >= 0
+        ? DEFAULT_GRACE_DAYS
+        : 15;
   const clientCollection = getCollection(collections.clients);
-  const clients = await clientCollection.find({}).toArray();
-  const snapshot = await getMikrotikCheckerSnapshot();
-  const indexes = buildSnapshotIndexes(snapshot);
+  const [clients, bypassRows, netPlans] = await Promise.all([
+    clientCollection.find({}).toArray(),
+    getCollection(collections.clientBypass).find({}).toArray(),
+    getCollection(collections.netPlans).find({}).toArray()
+  ]);
+  const bypassAccountKeys = new Set(
+    (bypassRows || [])
+      .map((row) => normalizeText(row?.AccountNameKey || row?.AccountName))
+      .filter(Boolean)
+  );
+  const bypassClientIds = new Set(
+    (bypassRows || [])
+      .map((row) => String(row?.ClientId || "").trim())
+      .filter(Boolean)
+  );
   const rows = [];
   const updates = [];
+  const todayStart = getManilaTodayStart();
 
   let checkedCount = 0;
   let disconnectedFoundCount = 0;
   let updatedCount = 0;
   let alreadyDisconnectedCount = 0;
+  let bypassSkippedCount = 0;
 
   for (const client of clients) {
     const authMode = normalizeText(client?.AuthenticationMode);
@@ -243,63 +325,64 @@ const generateMikrotikDcBatchReport = async ({ applyChanges = false, triggeredBy
 
     checkedCount += 1;
 
-    const accountKey = normalizeText(client?.AccountName);
-    const macKey = normalizeText(client?.MacAddress || client?.macAddress);
-    const oldProfile = String(client?.Profile || "").trim();
-    const oldNetPlan = String(client?.NetPlan || "").trim();
-
-    let disconnected = false;
-    let detail = "";
-
-    if (authMode === "PPPOE") {
-      const secret = indexes.pppByName.get(accountKey);
-      const profile = normalizeText(secret?.profile || secret?.Profile);
-
-      if (profile === PPP_DISCONNECTED_PROFILE) {
-        disconnected = true;
-        detail = "MikroTik PPP secret profile is dc-putol.";
-      }
-    } else if (authMode === "IPOE") {
-      const lease =
-        (macKey && indexes.leaseByMac.get(macKey)) ||
-        indexes.leaseByAccount.get(accountKey);
-      const plan = extractIpoeCommentPlan(lease?.comment);
-
-      if (plan === "0M/0M") {
-        disconnected = true;
-        detail = "MikroTik IPOE lease comment plan is 0M/0M.";
-      }
+    if (isBypassClient(client, bypassAccountKeys, bypassClientIds)) {
+      bypassSkippedCount += 1;
+      continue;
     }
 
-    if (!disconnected) {
+    const accountKey = normalizeText(client?.AccountName);
+    const oldProfile = String(client?.Profile || "").trim();
+    const oldNetPlan = String(client?.NetPlan || "").trim();
+    const nextPlanValue = authMode === "PPPOE" ? PPP_DISCONNECTED_PROFILE : disconnectedPlanName;
+    const dueDateRaw = String(client?.DueDate || "").trim();
+    const dueDate = parseDateOnly(dueDateRaw);
+
+    if (!dueDate) {
+      continue;
+    }
+
+    if (!isUnpaidClient(client)) {
+      continue;
+    }
+
+    const disconnectDate = addDaysUtc(dueDate, graceDays);
+    const isEligible =
+      graceDays < OVERDUE_ACCUMULATE_THRESHOLD
+        ? disconnectDate.getTime() === todayStart.getTime()
+        : disconnectDate.getTime() <= todayStart.getTime();
+
+    if (!isEligible) {
       continue;
     }
 
     disconnectedFoundCount += 1;
+    const overdueDays = Math.max(
+      0,
+      Math.round((todayStart.getTime() - disconnectDate.getTime()) / (24 * 60 * 60 * 1000))
+    );
 
     if (isSystemDisconnected(client)) {
       alreadyDisconnectedCount += 1;
-      rows.push(
-        buildRow({
-          result: "ALREADY_DISCONNECTED",
-          authMode,
-          accountName: client?.AccountName,
-          clientName: client?.ClientName,
-          oldProfile,
-          oldNetPlan,
-          nextPlan: disconnectedPlanName,
-          detail: `${detail} System record is already disconnected.`
-        })
-      );
       continue;
     }
 
+    const disconnectedAmountDue = resolveDisconnectedAmountDue(
+      netPlans,
+      authMode === "PPPOE" ? PPP_DISCONNECTED_PROFILE : disconnectedPlanName,
+      Number(client?.AmountDue ?? 0)
+    );
     const updatePayload = {
-      Profile: disconnectedPlanName,
+      PreviousAuthenticationMode: client?.AuthenticationMode || "",
+      PreviousProfile: oldProfile,
+      PreviousNetPlan: oldNetPlan,
+      PreviousMacAddress: client?.MacAddress || "",
+      Profile: authMode === "PPPOE" ? PPP_DISCONNECTED_PROFILE : disconnectedPlanName,
       NetPlan: disconnectedPlanName,
+      AmountDue: disconnectedAmountDue,
       Status: "DISCONNECTED",
       updatedAt: new Date()
     };
+    let detail = `Due date ${formatDateOnlyUtc(dueDate)} exceeded the ${graceDays}-day grace period. Disconnect date ${formatDateOnlyUtc(disconnectDate)}.`;
 
     rows.push(
       buildRow({
@@ -309,12 +392,30 @@ const generateMikrotikDcBatchReport = async ({ applyChanges = false, triggeredBy
         clientName: client?.ClientName,
         oldProfile,
         oldNetPlan,
-        nextPlan: disconnectedPlanName,
-        detail
+        nextPlan: nextPlanValue,
+        detail: `${detail} ${overdueDays > 0 ? `Overdue by ${overdueDays} day(s) past disconnect date.` : "Ready for disconnect today."}`
       })
     );
 
     if (applyChanges && client?._id) {
+      if (authMode === "PPPOE") {
+        const disconnectRemark = formatDisconnectRemark(new Date());
+        await setPPPoESecretDisconnected({
+          username: client?.AccountName,
+          password: client?.Password || "",
+          profile: PPP_DISCONNECTED_PROFILE,
+          disconnectRemark
+        });
+        detail = `${detail} PPPoE secret changed to ${PPP_DISCONNECTED_PROFILE} with remark "${disconnectRemark}".`;
+      } else if (authMode === "IPOE") {
+        await setIpoeLeaseStatic({
+          macAddress: client?.MacAddress || client?.macAddress || "",
+          plan: "0M/0M",
+          accountName: client?.AccountName || ""
+        });
+        detail = `${detail} IPOE lease comment changed to PLAN=0M/0M.`;
+      }
+
       await clientCollection.updateOne(
         { _id: client._id },
         {
@@ -326,10 +427,14 @@ const generateMikrotikDcBatchReport = async ({ applyChanges = false, triggeredBy
       updates.push({
         accountName: client?.AccountName || "",
         authMode,
+        dueDate: dueDateRaw,
         oldProfile,
         oldNetPlan,
-        nextPlan: disconnectedPlanName
+        nextPlan: nextPlanValue
       });
+
+      rows[rows.length - 1].detail = detail;
+      rows[rows.length - 1].result = "UPDATED_TO_DISCONNECTED";
     }
   }
 
@@ -339,11 +444,12 @@ const generateMikrotikDcBatchReport = async ({ applyChanges = false, triggeredBy
     disconnectedFoundCount,
     updatedCount,
     alreadyDisconnectedCount,
+    bypassSkippedCount,
     totalRows: rows.length
   };
 
   if (applyChanges) {
-    const runSummary = `Checked ${checkedCount} client(s). MikroTik disconnected: ${disconnectedFoundCount}. Updated in system: ${updatedCount}.`;
+    const runSummary = `Checked ${checkedCount} client(s). Eligible after ${graceDays} day(s): ${disconnectedFoundCount}. Updated in system: ${updatedCount}. Skipped bypass: ${bypassSkippedCount}.`;
     await updateRunSummary({
       LastRunKey: getManilaDateKey(generatedAt),
       LastRunAt: generatedAt,
@@ -445,3 +551,5 @@ module.exports = {
   generateMikrotikDcBatchReport,
   startMikrotikDcBatchScheduler
 };
+
+

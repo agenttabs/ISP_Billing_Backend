@@ -9,6 +9,7 @@ const defaultPrintReceiptConfig = () => ({
   ReceiptSubtitle: "For Xprinter / Thermal Printer",
   FooterNote: "Thank you for your payment.",
   PreferredPrinterName: "Xprinter",
+  EnablePrinting: true,
   UseDirectPrint: true,
   ShowSubscriptionCover: true,
   ShowContactNumber: true,
@@ -31,6 +32,9 @@ const sanitizeConfig = (config = {}) => {
     PreferredPrinterName: String(
       config.PreferredPrinterName ?? defaults.PreferredPrinterName
     ).trim(),
+    EnablePrinting: Boolean(
+      config.EnablePrinting ?? defaults.EnablePrinting
+    ),
     UseDirectPrint: Boolean(
       config.UseDirectPrint ?? defaults.UseDirectPrint
     ),
@@ -65,11 +69,12 @@ exports.savePrintReceiptConfig = async (req, res) => {
   try {
     const collection = getReceiptCollection();
     const current = await collection.findOne({});
-    const nextConfig = sanitizeConfig({
+    const mergedConfig = sanitizeConfig({
       ...(current || {}),
       ...req.body,
       updatedAt: new Date()
     });
+    const { _id, ...nextConfig } = mergedConfig;
 
     if (current?._id) {
       await collection.updateOne(
@@ -86,7 +91,10 @@ exports.savePrintReceiptConfig = async (req, res) => {
       });
     }
 
-    res.json(nextConfig);
+    res.json({
+      ...(current?._id ? { _id: current._id } : {}),
+      ...nextConfig
+    });
 
     await writeAuditLog({
       req,

@@ -12,4 +12,11 @@ router.post(
   controller.sendPaymentReceivedSms
 );
 
+router.post(
+  "/sms/send-payment-received-latest/:clientId",
+  protect,
+  authorize("ADMIN", "CASHIER"),
+  controller.sendLatestPaymentReceivedSms
+);
+
 module.exports = router;

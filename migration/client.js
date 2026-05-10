@@ -14,7 +14,7 @@ const Client =
 
 // read JSON
 const data = JSON.parse(
-  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/Servers/client.json", "utf-8")
+  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/05092026/client.json", "utf-8")
 );
 
 // 🔥 DATE PARSER
@@ -87,6 +87,15 @@ async function migrate() {
     const formatted = data.map(transform);
 
     await Client.insertMany(formatted);
+    await Client.collection.createIndex({ AccountNumber: 1 });
+    await Client.collection.createIndex({ AccountName: 1 });
+    await Client.collection.createIndex({ ClientName: 1 });
+    await Client.collection.createIndex({ AuthenticationMode: 1 });
+    await Client.collection.createIndex({ DueDate: 1 });
+    await Client.collection.createIndex({ Status: 1 });
+    await Client.collection.createIndex({ NetPlan: 1 });
+    await Client.collection.createIndex({ MacAddress: 1 });
+    await Client.collection.createIndex({ AuthenticationMode: 1, DueDate: 1, Status: 1 });
 
     console.log("✅ Migration complete (all fields cleaned)");
   } catch (err) {

@@ -1,44 +1,46 @@
 const mongoose = require("mongoose");
 const fs = require("fs");
-const path = require("path");
 const collections = require("../config/collections");
 const { MONGO_URI, MONGOOSE_OPTIONS } = require("../config/mongo");
-const FILE_PATH = path.join("D:/Michael/MichaelNuyana/isp-table/Servers/", "Earnings.json");
 
-// ✅ parse old date format: 2025/5/2
+mongoose.connect(MONGO_URI, MONGOOSE_OPTIONS);
+
+const earningSchema = new mongoose.Schema({}, { strict: false });
+const Earning =
+  mongoose.models[collections.earnings] ||
+  mongoose.model(collections.earnings, earningSchema, collections.earnings);
+
+const data = JSON.parse(
+  fs.readFileSync("D:/Michael/MichaelNuyana/isp-table/05092026/Earnings.json", "utf-8")
+);
+
 function parseDate(value) {
   if (!value) return new Date();
 
   try {
-    // already ISO-like
-    if (value.includes("-")) {
-      const d = new Date(value);
-      return isNaN(d.getTime()) ? new Date() : d;
+    if (String(value).includes("-")) {
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
     }
 
-    // old format: YYYY/M/D
     const parts = String(value).split("/");
     if (parts.length !== 3) return new Date();
 
     const [year, month, day] = parts;
-
     const normalized = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    const d = new Date(normalized);
+    const parsed = new Date(normalized);
 
-    return isNaN(d.getTime()) ? new Date() : d;
-  } catch (err) {
-    console.log("❌ Date parse error:", value);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  } catch (_err) {
     return new Date();
   }
 }
 
-// ✅ convert string/number to real number
-function toNumber(val) {
-  if (val === null || val === undefined || val === "") return 0;
-  return Number(String(val).replace(/,/g, "").trim()) || 0;
+function toNumber(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  return Number(String(value).replace(/,/g, "").trim()) || 0;
 }
 
-// ✅ generate invoice if missing
 function generateInvoice(date) {
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, "0");
@@ -46,70 +48,54 @@ function generateInvoice(date) {
   return `PR-${yyyy}${mm}${dd}-${Date.now()}${Math.floor(Math.random() * 1000)}`;
 }
 
+function transform(record) {
+  const transactionDate = parseDate(record.TransactionDate);
+
+  const doc = {
+    ...record,
+    AccountName: record.AccountName || "",
+    Invoice: record.Invoice || generateInvoice(transactionDate),
+    Item: record.Item || "ISP-Client Payment",
+    MOP: String(record.MOP || "CASH").toUpperCase(),
+    MOPRef: record.MOPRef || record.Invoice || "",
+    Cash: toNumber(record.Cash),
+    DeclaredBy: record.DeclaredBy || "",
+    TransactionDate: transactionDate,
+    createdAt: transactionDate,
+    updatedAt: transactionDate
+  };
+
+  if (record.Expenses !== undefined) {
+    doc.Expenses = toNumber(record.Expenses);
+  }
+
+  return doc;
+}
+
 async function migrate() {
   try {
     await mongoose.connect(MONGO_URI, MONGOOSE_OPTIONS);
-    console.log("✅ Connected to MongoDB");
 
-    const db = mongoose.connection.db;
-    const collection = db.collection(collections.earnings);
-
-    // read json file
-    const raw = fs.readFileSync(FILE_PATH, "utf-8");
-    const data = JSON.parse(raw);
+    console.log("Clearing existing earnings...");
+    await Earning.deleteMany({});
+    console.log("Existing earnings cleared");
 
     if (!Array.isArray(data)) {
       throw new Error("Earnings.json must be an array");
     }
 
-    console.log(`📦 Found ${data.length} records in JSON`);
+    const formatted = data.map(transform);
 
-    let insertedCount = 0;
-    let skippedCount = 0;
+    await Earning.insertMany(formatted);
+    await Earning.collection.createIndex({ Invoice: 1 });
+    await Earning.collection.createIndex({ MOPRef: 1 });
 
-    for (const item of data) {
-      const txDate = parseDate(item.TransactionDate);
-
-      const doc = {
-        AccountName: item.AccountName || "",
-        Invoice: item.Invoice || generateInvoice(txDate),
-        Item: item.Item || "ISP-Client Payment",
-        MOP: (item.MOP || "CASH").toUpperCase(),
-        MOPRef: item.MOPRef || item.Invoice || "",
-        Cash: toNumber(item.Cash),
-        DeclaredBy: item.DeclaredBy || "",
-        TransactionDate: txDate,
-        createdAt: txDate,
-        updatedAt: txDate
-      };
-
-      // ✅ optional: only include Expenses if you still want it
-      if (item.Expenses !== undefined) {
-        doc.Expenses = toNumber(item.Expenses);
-      }
-
-      // ✅ skip duplicate invoice
-      const existing = await collection.findOne({ Invoice: doc.Invoice });
-
-      if (existing) {
-        console.log(`⚠️ Skipped duplicate invoice: ${doc.Invoice}`);
-        skippedCount++;
-        continue;
-      }
-
-      await collection.insertOne(doc);
-      console.log(`✅ Inserted: ${doc.Invoice} | ${doc.AccountName}`);
-      insertedCount++;
-    }
-
-    console.log("\n🎉 MIGRATION COMPLETE");
-    console.log(`✅ Inserted: ${insertedCount}`);
-    console.log(`⚠️ Skipped duplicates: ${skippedCount}`);
+    console.log("Migration complete");
+    console.log(`Inserted: ${formatted.length}`);
   } catch (err) {
-    console.error("❌ Migration error:", err.message);
+    console.error("Migration error:", err.message);
   } finally {
     await mongoose.disconnect();
-    console.log("🔌 Disconnected from MongoDB");
     process.exit();
   }
 }

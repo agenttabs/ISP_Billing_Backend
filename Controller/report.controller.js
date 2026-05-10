@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const { ObjectId } = mongoose.Types;
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
+const { getMikrotikCheckerSnapshot } = require("../services/mikrotik");
 
 const isDisconnectedClient = (client) => {
   const planValue = String(
@@ -79,6 +80,184 @@ const getClientInstallDateValue = (client) => {
 const getRepairLogDateValue = (row) =>
   new Date(row?.createdAt || row?.updatedAt || Date.now());
 
+const DISCONNECT_AFTER_DAYS = Number(process.env.DISCONNECT_AFTER_DAYS || 15);
+
+const parseDateOnly = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+};
+
+const addDaysUtc = (date, days) => {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+};
+
+const getManilaTodayStart = () => {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  })
+    .formatToParts(now)
+    .filter((part) => part.type !== "literal")
+    .reduce((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+
+  return new Date(
+    Date.UTC(Number(parts.year || 0), Number(parts.month || 1) - 1, Number(parts.day || 1))
+  );
+};
+
+const isClientPlanDisconnected = (client) => {
+  const planValue = String(
+    client.NetPlan ?? client.Profile ?? client.Plan ?? ""
+  ).toUpperCase();
+  const statusValue = String(client.Status ?? client.status ?? "").toUpperCase();
+
+  return (
+    planValue.includes("DISCONNECTION") ||
+    planValue.includes("DISCONNECTED") ||
+    statusValue.includes("DISCONNECTION") ||
+    statusValue.includes("DISCONNECTED")
+  );
+};
+
+const isUnpaidClient = (client) => {
+  const paymentStatus = String(client?.PaymentStatus || "").trim().toUpperCase();
+  const amountDue = Number(client?.AmountDue ?? client?.amountDue ?? 0);
+
+  if (paymentStatus && paymentStatus !== "PAID") {
+    return true;
+  }
+
+  return Number.isFinite(amountDue) && amountDue > 0;
+};
+
+const getDisconnectionTodayRows = (clients = []) => {
+  const todayStart = getManilaTodayStart();
+  const graceDays =
+    Number.isFinite(DISCONNECT_AFTER_DAYS) && DISCONNECT_AFTER_DAYS >= 0
+      ? DISCONNECT_AFTER_DAYS
+      : 15;
+
+  return clients
+    .filter((client) => {
+      const authMode = String(client?.AuthenticationMode || "").trim().toUpperCase();
+      if (authMode !== "PPPOE" && authMode !== "IPOE") {
+        return false;
+      }
+
+      if (isClientPlanDisconnected(client) || !isUnpaidClient(client)) {
+        return false;
+      }
+
+      const dueDate = parseDateOnly(client?.DueDate);
+      if (!dueDate) {
+        return false;
+      }
+
+      const disconnectDate = addDaysUtc(dueDate, graceDays);
+      return disconnectDate.getTime() === todayStart.getTime();
+    })
+    .map((client) => {
+      const dueDate = parseDateOnly(client?.DueDate);
+      const disconnectDate = dueDate ? addDaysUtc(dueDate, graceDays) : null;
+
+      return {
+        clientId: String(client?._id || "").trim(),
+        accountName: client?.AccountName || "-",
+        clientName: client?.ClientName || "-",
+        authMode: String(client?.AuthenticationMode || "").trim().toUpperCase() || "-",
+        mikrotikPlan: "-",
+        dueDate: String(client?.DueDate || "").trim() || "-",
+        disconnectDate: disconnectDate ? disconnectDate.toISOString().slice(0, 10) : "-",
+        amountDue: Number(client?.AmountDue ?? client?.amountDue ?? 0) || 0,
+        contactNumber: client?.ContactNumber || client?.Mobile || client?.Phone || "-",
+        address: client?.Address || "-"
+      };
+    })
+    .sort((a, b) => a.accountName.localeCompare(b.accountName));
+};
+
+const buildClientScheduleRow = (client, todayStart) => {
+  const dueDate = parseDateOnly(client?.DueDate);
+  const disconnectDate = dueDate
+    ? addDaysUtc(
+        dueDate,
+        Number.isFinite(DISCONNECT_AFTER_DAYS) && DISCONNECT_AFTER_DAYS >= 0
+          ? DISCONNECT_AFTER_DAYS
+          : 15
+      )
+    : null;
+
+  const daysPastDue = dueDate
+    ? Math.max(
+        0,
+        Math.floor((todayStart.getTime() - dueDate.getTime()) / (24 * 60 * 60 * 1000))
+      )
+    : 0;
+
+  return {
+    clientId: String(client?._id || "").trim(),
+    accountName: client?.AccountName || "-",
+    clientName: client?.ClientName || "-",
+    authMode: String(client?.AuthenticationMode || "").trim().toUpperCase() || "-",
+    dueDate: String(client?.DueDate || "").trim() || "-",
+    disconnectDate: disconnectDate ? disconnectDate.toISOString().slice(0, 10) : "-",
+    amountDue: Number(client?.AmountDue ?? client?.amountDue ?? 0) || 0,
+    contactNumber: client?.ContactNumber || client?.Mobile || client?.Phone || "-",
+    address: client?.Address || "-",
+    daysPastDue
+  };
+};
+
+const getDashboardQualifiedClients = (clients = []) =>
+  clients.filter((client) => {
+    const authMode = String(client?.AuthenticationMode || "").trim().toUpperCase();
+    if (authMode !== "PPPOE" && authMode !== "IPOE") {
+      return false;
+    }
+
+    return !isClientPlanDisconnected(client) && isUnpaidClient(client) && parseDateOnly(client?.DueDate);
+  });
+
+const getDueTodayRows = (clients = []) => {
+  const todayStart = getManilaTodayStart();
+
+  return getDashboardQualifiedClients(clients)
+    .filter((client) => {
+      const dueDate = parseDateOnly(client?.DueDate);
+      return dueDate && dueDate.getTime() === todayStart.getTime();
+    })
+    .map((client) => buildClientScheduleRow(client, todayStart))
+    .sort((a, b) => a.accountName.localeCompare(b.accountName));
+};
+
+const getPastDueUnpaidRows = (clients = []) => {
+  const todayStart = getManilaTodayStart();
+
+  return getDashboardQualifiedClients(clients)
+    .filter((client) => {
+      const dueDate = parseDateOnly(client?.DueDate);
+      return dueDate && dueDate.getTime() < todayStart.getTime();
+    })
+    .map((client) => buildClientScheduleRow(client, todayStart))
+    .sort((a, b) => b.daysPastDue - a.daysPastDue || a.accountName.localeCompare(b.accountName));
+};
+
 const normalizeAccountNumber = (value) =>
   String(value || "").replace(/\s+/g, "").trim();
 
@@ -154,38 +333,65 @@ const getTopLevelPaymentFields = (row) => {
 
 const formatPrDate = (date) => {
   const targetDate = new Date(date || Date.now());
-  const year = targetDate.getFullYear();
+  const year = String(targetDate.getFullYear()).slice(-2);
   const month = String(targetDate.getMonth() + 1).padStart(2, "0");
   const day = String(targetDate.getDate()).padStart(2, "0");
   return `${year}${month}${day}`;
 };
 
-const getNextPrNumberFromRows = (rows, datePart) => {
-  const prefix = `PR-${datePart}-`;
-  let highestSequence = 0;
+const generateRandomPrNumber = (datePart) => {
+  const randomFourDigits = String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+  return `PR-${datePart}-${randomFourDigits}`;
+};
 
-  rows.forEach((row) => {
+const receiptNumberExistsInRows = (rows, receiptNumber) => {
+  const normalizedReceiptNumber = String(receiptNumber || "").trim().toUpperCase();
+
+  if (!normalizedReceiptNumber) {
+    return false;
+  }
+
+  return rows.some((row) => {
     const candidates = [
-      String(row.Invoice || "").trim(),
-      String(row.PaymentReceipt || "").trim(),
-      String(row.TransactionCode || "").trim()
+      String(row.Invoice || "").trim().toUpperCase(),
+      String(row.PaymentReceipt || "").trim().toUpperCase(),
+      String(row.TransactionCode || "").trim().toUpperCase()
     ];
 
-    candidates.forEach((value) => {
-      if (!value.startsWith(prefix)) {
-        return;
-      }
-
-      const sequencePart = value.slice(prefix.length);
-      const sequenceNumber = Number(sequencePart);
-
-      if (Number.isFinite(sequenceNumber) && sequenceNumber > highestSequence) {
-        highestSequence = sequenceNumber;
-      }
-    });
+    return candidates.includes(normalizedReceiptNumber);
   });
+};
 
-  return `${prefix}${String(highestSequence + 1).padStart(4, "0")}`;
+const getNextAvailablePrNumberFromRows = (rows, datePart) => {
+  let guard = 0;
+  let nextReceiptNumber = generateRandomPrNumber(datePart);
+
+  while (receiptNumberExistsInRows(rows, nextReceiptNumber) && guard < 10000) {
+    nextReceiptNumber = generateRandomPrNumber(datePart);
+    guard += 1;
+  }
+
+  return nextReceiptNumber;
+};
+
+const documentNumberExistsInRows = (rows, values = []) => {
+  const normalizedValues = values
+    .map((value) => String(value || "").trim().toUpperCase())
+    .filter(Boolean);
+
+  if (!normalizedValues.length) {
+    return false;
+  }
+
+  return rows.some((row) => {
+    const candidates = [
+      String(row.Invoice || "").trim().toUpperCase(),
+      String(row.PaymentReceipt || "").trim().toUpperCase(),
+      String(row.TransactionCode || "").trim().toUpperCase()
+    ].filter(Boolean);
+
+    return normalizedValues.some((value) => candidates.includes(value));
+  });
 };
 
 const mergeHistoryRows = (...rowGroups) => {
@@ -210,15 +416,65 @@ const mergeHistoryRows = (...rowGroups) => {
 
       seen.add(key);
       return true;
+      });
+  };
+
+const getHistoryReferenceCandidates = (row) =>
+  [
+    String(row?.Invoice || "").trim(),
+    String(row?.PaymentReceipt || "").trim(),
+    String(row?.TransactionCode || "").trim()
+  ]
+    .filter(Boolean)
+    .map((value) => value.toUpperCase());
+
+const buildEarningLookupMap = (rows = []) => {
+  const lookup = new Map();
+
+  rows.forEach((row) => {
+    getHistoryReferenceCandidates(row).forEach((key) => {
+      if (key && !lookup.has(key)) {
+        lookup.set(key, row);
+      }
     });
+  });
+
+  return lookup;
+};
+
+const enrichPrintHistoryRowWithEarning = (row, earningLookup) => {
+  const matchedEarning = getHistoryReferenceCandidates(row)
+    .map((key) => earningLookup.get(key))
+    .find(Boolean);
+
+  if (!matchedEarning) {
+    return row;
+  }
+
+  return {
+    ...row,
+    PaymentMethod: row?.PaymentMethod || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
+    MOP: row?.MOP || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
+    MOPRef:
+      row?.MOPRef ||
+      matchedEarning?.MOPRef ||
+      matchedEarning?.ReferenceNumber ||
+      matchedEarning?.TransactionCode ||
+      "",
+    ReferenceNumber:
+      row?.ReferenceNumber ||
+      matchedEarning?.MOPRef ||
+      matchedEarning?.ReferenceNumber ||
+      matchedEarning?.TransactionCode ||
+      ""
+  };
 };
 
 exports.getDashboardSummary = async (_req, res) => {
   try {
-    const clients = await mongoose.connection.db
-      .collection(collections.clients)
-      .find({})
-      .toArray();
+    const db = mongoose.connection.db;
+    const clients = await db.collection(collections.clients).find({}).toArray();
+    const printRows = await db.collection(collections.print).find({}).toArray();
 
     const activeClients = clients.filter((client) => !isDisconnectedClient(client));
     const pppoeCount = activeClients.filter(
@@ -227,12 +483,198 @@ exports.getDashboardSummary = async (_req, res) => {
     const ipoeCount = activeClients.filter(
       (client) => String(client.AuthenticationMode || "").toUpperCase() === "IPOE"
     ).length;
+    const { start, end } = getTodayRange();
+    const paymentTotals = {
+      gcashPayment: 0,
+      paymayaPayment: 0,
+      bankPayment: 0,
+      cashPayment: 0,
+      gcashPaidClients: 0,
+      paymayaPaidClients: 0,
+      bankPaidClients: 0,
+      cashPaidClients: 0
+    };
+    const paidClientSets = {
+      GCASH: new Set(),
+      PAYMAYA: new Set(),
+      BANK: new Set(),
+      CASH: new Set()
+    };
+
+    printRows
+      .filter((row) => {
+        const transactionDate = getTransactionDateValue(row);
+        return transactionDate >= start && transactionDate <= end;
+      })
+      .forEach((row) => {
+        const accountKey = normalizeAccountNumber(
+          row.AccountNumber || row.AccountName || row.ClientId || row._id
+        );
+
+        getPaymentBreakdownLines(row).forEach((line) => {
+          const amount = Number(line.Amount || 0);
+          if (!Number.isFinite(amount) || amount <= 0) {
+            return;
+          }
+
+          if (line.Method === "GCASH") {
+            paymentTotals.gcashPayment += amount;
+            if (accountKey) paidClientSets.GCASH.add(accountKey);
+          } else if (line.Method === "PAYMAYA") {
+            paymentTotals.paymayaPayment += amount;
+            if (accountKey) paidClientSets.PAYMAYA.add(accountKey);
+          } else if (line.Method === "BANK") {
+            paymentTotals.bankPayment += amount;
+            if (accountKey) paidClientSets.BANK.add(accountKey);
+          } else if (line.Method === "CASH") {
+            paymentTotals.cashPayment += amount;
+            if (accountKey) paidClientSets.CASH.add(accountKey);
+          }
+        });
+      });
+
+    paymentTotals.gcashPaidClients = paidClientSets.GCASH.size;
+    paymentTotals.paymayaPaidClients = paidClientSets.PAYMAYA.size;
+    paymentTotals.bankPaidClients = paidClientSets.BANK.size;
+    paymentTotals.cashPaidClients = paidClientSets.CASH.size;
 
     res.json({
       activeClients: activeClients.length,
       pppoeClients: pppoeCount,
       ipoeClients: ipoeCount,
-      totalClients: clients.length
+      totalClients: clients.length,
+      forDisconnectionToday: getDisconnectionTodayRows(clients).length,
+      dueToday: getDueTodayRows(clients).length,
+      pastDueUnpaid: getPastDueUnpaidRows(clients).length,
+      ...paymentTotals
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getDashboardDisconnectionToday = async (_req, res) => {
+  try {
+    const clients = await mongoose.connection.db
+      .collection(collections.clients)
+      .find({})
+      .toArray();
+
+    const rows = getDisconnectionTodayRows(clients);
+    const clientMap = new Map(
+      clients.map((client) => [String(client?._id || "").trim(), client])
+    );
+    let snapshot = { pppSecrets: [], dhcpLeases: [] };
+
+    try {
+      snapshot = (await getMikrotikCheckerSnapshot()) || snapshot;
+    } catch (_error) {
+      snapshot = { pppSecrets: [], dhcpLeases: [] };
+    }
+
+    const pppSecretPlanByAccount = new Map(
+      (Array.isArray(snapshot.pppSecrets) ? snapshot.pppSecrets : []).map((secret) => [
+        String(secret?.name || "").trim().toUpperCase(),
+        String(secret?.profile || "").trim() || "Not Found"
+      ])
+    );
+
+    const dhcpPlanByKey = new Map();
+    (Array.isArray(snapshot.dhcpLeases) ? snapshot.dhcpLeases : []).forEach((lease) => {
+      const comment = String(lease?.comment || "");
+      const accountMatch = comment.match(/NAME=([^;]+)/i);
+      const planMatch = comment.match(/PLAN=([^;]+)/i);
+      const accountKey = String(accountMatch?.[1] || "").trim().toUpperCase();
+      const macKey = String(lease?.["mac-address"] || lease?.macAddress || "")
+        .trim()
+        .toUpperCase();
+      const planValue = String(planMatch?.[1] || "").trim() || "Not Found";
+
+      if (accountKey) {
+        dhcpPlanByKey.set(`ACCOUNT:${accountKey}`, planValue);
+      }
+
+      if (macKey) {
+        dhcpPlanByKey.set(`MAC:${macKey}`, planValue);
+      }
+    });
+
+    const enrichedRows = rows.map((row) => {
+      const client = clientMap.get(String(row.clientId || "").trim());
+      const authMode = String(row.authMode || "").trim().toUpperCase();
+
+      if (!client) {
+        return {
+          ...row,
+          mikrotikPlan: "Not Found"
+        };
+      }
+
+      if (authMode === "PPPOE") {
+        const accountKey = String(client.AccountName || "").trim().toUpperCase();
+        return {
+          ...row,
+          mikrotikPlan: pppSecretPlanByAccount.get(accountKey) || "Not Found"
+        };
+      }
+
+      if (authMode === "IPOE") {
+        const accountKey = String(client.AccountName || "").trim().toUpperCase();
+        const macKey = String(client.MacAddress || client.macAddress || "")
+          .trim()
+          .toUpperCase();
+        return {
+          ...row,
+          mikrotikPlan:
+            dhcpPlanByKey.get(`ACCOUNT:${accountKey}`) ||
+            dhcpPlanByKey.get(`MAC:${macKey}`) ||
+            "Not Found"
+        };
+      }
+
+      return {
+        ...row,
+        mikrotikPlan: "Not Found"
+      };
+    });
+
+    res.json({
+      total: enrichedRows.length,
+      rows: enrichedRows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getDashboardDueToday = async (_req, res) => {
+  try {
+    const clients = await mongoose.connection.db
+      .collection(collections.clients)
+      .find({})
+      .toArray();
+
+    const rows = getDueTodayRows(clients);
+    res.json({
+      total: rows.length,
+      rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getDashboardPastDueUnpaid = async (_req, res) => {
+  try {
+    const clients = await mongoose.connection.db
+      .collection(collections.clients)
+      .find({})
+      .toArray();
+
+    const rows = getPastDueUnpaidRows(clients);
+    res.json({
+      total: rows.length,
+      rows
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -243,8 +685,10 @@ exports.getTransactions = async (req, res) => {
   try {
     const db = mongoose.connection.db;
     const printCollection = db.collection(collections.print);
+    const earningsCollection = db.collection(collections.earnings);
     const requestedAccountNumber = normalizeAccountNumber(req.query.accountNumber);
     let printRows = [];
+    let earningRows = [];
 
     try {
       printRows = await printCollection.find({}).toArray();
@@ -253,8 +697,17 @@ exports.getTransactions = async (req, res) => {
       printRows = [];
     }
 
+    try {
+      earningRows = await earningsCollection.find({}).toArray();
+    } catch (err) {
+      console.warn("EARNINGS COLLECTION QUERY WARNING:", err.message);
+      earningRows = [];
+    }
+
+    const earningLookup = buildEarningLookupMap(earningRows);
+
     const printHistoryRows = printRows.map((row) => ({
-      ...row,
+      ...enrichPrintHistoryRowWithEarning(row, earningLookup),
       HistorySource: "print"
     }));
 
@@ -409,20 +862,23 @@ exports.getNextPaymentReceiptNumber = async (req, res) => {
       return res.status(400).json({ error: "Invalid payment date." });
     }
 
-    const db = mongoose.connection.db;
-    const transactions = await db.collection(collections.print).find({}).toArray();
-    const earnings = await db.collection(collections.earnings).find({}).toArray();
-    const datePart = formatPrDate(requestedDate);
-    const nextNumber = getNextPrNumberFromRows(
-      [...transactions, ...earnings],
-      datePart
-    );
+      const db = mongoose.connection.db;
+      const transactions = await db.collection(collections.print).find({}).toArray();
+      const earnings = await db.collection(collections.earnings).find({}).toArray();
+      const datePart = formatPrDate(requestedDate);
+      const nextNumber = getNextAvailablePrNumberFromRows(
+        [...transactions, ...earnings],
+        datePart
+      );
 
-    res.json({ receiptNumber: nextNumber });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.set("Pragma", "no-cache");
+      res.set("Expires", "0");
+      res.json({ receiptNumber: nextNumber });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  };
 
 exports.validatePaymentReferences = async (req, res) => {
   try {
@@ -535,6 +991,44 @@ exports.validatePaymentReferences = async (req, res) => {
     res.json({
       valid: true,
       refs: results
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.validatePaymentDocuments = async (req, res) => {
+  try {
+    const paymentReceipt = String(req.body?.paymentReceipt || "").trim();
+    const salesInvoice = String(req.body?.salesInvoice || "").trim();
+    const valuesToCheck = [paymentReceipt, salesInvoice].filter(Boolean);
+
+    if (!valuesToCheck.length) {
+      return res.status(400).json({ error: "Payment receipt or sales invoice is required." });
+    }
+
+    const db = mongoose.connection.db;
+    const [printRows, earningRows] = await Promise.all([
+      db.collection(collections.print).find({}).toArray(),
+      db.collection(collections.earnings).find({}).toArray()
+    ]);
+
+    const allRows = [...printRows, ...earningRows];
+    const duplicateValues = valuesToCheck.filter((value) =>
+      documentNumberExistsInRows(allRows, [value])
+    );
+
+    if (duplicateValues.length) {
+      return res.status(409).json({
+        valid: false,
+        error: `Document number already exists: ${duplicateValues.join(", ")}.`,
+        duplicates: duplicateValues
+      });
+    }
+
+    res.json({
+      valid: true,
+      duplicates: []
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

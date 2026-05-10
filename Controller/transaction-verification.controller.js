@@ -19,6 +19,132 @@ const normalizeReferenceValue = (value) =>
     .trim();
 
 const normalizeCommentValue = (value) => String(value || "").trim();
+const normalizeLookupValue = (value) => String(value || "").trim().toUpperCase();
+
+const parseDateValue = (value) => {
+  if (!value) return null;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value;
+  }
+
+  const rawValue = String(value).trim();
+  if (!rawValue) return null;
+
+  const directDate = new Date(rawValue);
+  if (!Number.isNaN(directDate.getTime())) {
+    return directDate;
+  }
+
+  const slashMatch = rawValue.match(/^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:\s+.*)?$/);
+  if (slashMatch) {
+    const [, part1, part2, part3] = slashMatch;
+    let year;
+    let month;
+    let day;
+
+    if (part1.length === 4) {
+      year = Number(part1);
+      month = Number(part2);
+      day = Number(part3);
+    } else {
+      month = Number(part1);
+      day = Number(part2);
+      year = Number(part3);
+    }
+
+    const parsed = new Date(year, month - 1, day);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  return null;
+};
+
+const normalizeRequestedDate = (value) => {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return "";
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) {
+    return rawValue;
+  }
+
+  const slashMatch = rawValue.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    const [, part1, part2, year] = slashMatch;
+    const first = Number(part1);
+    const second = Number(part2);
+
+    if (first > 12) {
+      return `${year}-${String(second).padStart(2, "0")}-${String(first).padStart(2, "0")}`;
+    }
+
+    return `${year}-${String(first).padStart(2, "0")}-${String(second).padStart(2, "0")}`;
+  }
+
+  const parsed = parseDateValue(rawValue);
+  if (!parsed) return "";
+
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(
+    parsed.getDate()
+  ).padStart(2, "0")}`;
+};
+
+const isDateOnRequestedDay = (value, requestedDate) => {
+  const parsed = parseDateValue(value);
+  if (!parsed) return false;
+
+  const yyyy = parsed.getFullYear();
+  const mm = String(parsed.getMonth() + 1).padStart(2, "0");
+  const dd = String(parsed.getDate()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd}` === normalizeRequestedDate(requestedDate);
+};
+
+const getVerificationDateCandidate = (row) =>
+  row?.TransactionDate || row?.PaymentDate || row?.createdAt || null;
+
+const getHistoryReferenceCandidates = (row) =>
+  [
+    String(row?.Invoice || "").trim(),
+    String(row?.PaymentReceipt || "").trim(),
+    String(row?.TransactionCode || "").trim()
+  ]
+    .filter(Boolean)
+    .map(normalizeLookupValue);
+
+const buildEarningLookupMap = (rows = []) => {
+  const lookup = new Map();
+
+  rows.forEach((row) => {
+    getHistoryReferenceCandidates(row).forEach((key) => {
+      if (key && !lookup.has(key)) {
+        lookup.set(key, row);
+      }
+    });
+  });
+
+  return lookup;
+};
+
+const enrichPrintRowWithEarning = (row, earningLookup) => {
+  const matchedEarning = getHistoryReferenceCandidates(row)
+    .map((key) => earningLookup.get(key))
+    .find(Boolean);
+
+  if (!matchedEarning) {
+    return row;
+  }
+
+  return {
+    ...row,
+    PaymentMethod: row?.PaymentMethod || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
+    MOP: row?.MOP || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
+    MOPRef: matchedEarning?.MOPRef || row?.MOPRef || "",
+    ReferenceNumber: matchedEarning?.MOPRef || row?.ReferenceNumber || row?.MOPRef || ""
+  };
+};
 
 const getPaymentBreakdownLines = (row) => {
   if (Array.isArray(row?.PaymentBreakdown) && row.PaymentBreakdown.length) {
@@ -41,6 +167,7 @@ const getPaymentBreakdownLines = (row) => {
     normalizeReferenceValue(row?.TransactionCode) ||
     normalizeReferenceValue(row?.PaymentReceipt) ||
     normalizeReferenceValue(row?.Invoice);
+  const totalAmount = Number(row?.TotalAmount || row?.Cash || 0);
 
   if (cashAmount > 0) {
     lines.push({
@@ -61,8 +188,16 @@ const getPaymentBreakdownLines = (row) => {
   if (!lines.length && paymentMethod) {
     lines.push({
       Method: paymentMethod,
-      Amount: Number(row?.TotalAmount || row?.Cash || 0),
+      Amount: totalAmount,
       Reference: paymentMethod === "CASH" ? "" : fallbackReference
+    });
+  }
+
+  if (!lines.length && fallbackReference && totalAmount > 0) {
+    lines.push({
+      Method: "GCASH",
+      Amount: totalAmount,
+      Reference: fallbackReference
     });
   }
 
@@ -77,22 +212,41 @@ const isNonCashPayment = (row) => {
   return Boolean(getVerificationLine(row));
 };
 
-exports.getPendingTransactions = async (_req, res) => {
+exports.getPendingTransactions = async (req, res) => {
   try {
-    const rows = await mongoose.connection.db
-      .collection(collections.print)
-      .find({
-        Type: "Payment",
-        Verified: { $ne: true }
-      })
-      .sort({
-        PaymentDate: -1,
-        TransactionDate: -1,
-        createdAt: -1
-      })
-      .toArray();
+    const today = new Date();
+    const defaultDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
+      today.getDate()
+    ).padStart(2, "0")}`;
+    const filter = {
+      Type: "Payment",
+      Verified: { $ne: true }
+    };
+
+    const requestedDate = normalizeRequestedDate(req.query?.date || defaultDate) || defaultDate;
+    const start = new Date(`${requestedDate}T00:00:00`);
+    if (Number.isNaN(start.getTime())) {
+      return res.status(400).json({ error: "Invalid verification date." });
+    }
+
+    const db = mongoose.connection.db;
+    const [rows, earningRows] = await Promise.all([
+      db.collection(collections.print)
+        .find(filter)
+        .sort({
+          PaymentDate: -1,
+          TransactionDate: -1,
+          createdAt: -1
+        })
+        .toArray(),
+      db.collection(collections.earnings).find({}).toArray()
+    ]);
+
+    const earningLookup = buildEarningLookupMap(earningRows);
 
     const pendingTransactions = rows
+      .map((row) => enrichPrintRowWithEarning(row, earningLookup))
+      .filter((row) => isDateOnRequestedDay(getVerificationDateCandidate(row), requestedDate))
       .filter(isNonCashPayment)
       .map((row) => {
         const verificationLine = getVerificationLine(row);
@@ -122,6 +276,7 @@ exports.getPendingTransactions = async (_req, res) => {
       });
 
     res.json({
+      requestedDate,
       count: pendingTransactions.length,
       records: pendingTransactions
     });

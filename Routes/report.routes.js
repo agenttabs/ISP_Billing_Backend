@@ -12,6 +12,27 @@ router.get(
 );
 
 router.get(
+  "/dashboard/disconnection-today",
+  protect,
+  authorize("ADMIN", "CASHIER", "TECHNICIAN"),
+  controller.getDashboardDisconnectionToday
+);
+
+router.get(
+  "/dashboard/due-today",
+  protect,
+  authorize("ADMIN", "CASHIER", "TECHNICIAN"),
+  controller.getDashboardDueToday
+);
+
+router.get(
+  "/dashboard/past-due-unpaid",
+  protect,
+  authorize("ADMIN", "CASHIER", "TECHNICIAN"),
+  controller.getDashboardPastDueUnpaid
+);
+
+router.get(
   "/transactions",
   protect,
   authorize("ADMIN", "CASHIER"),
@@ -44,6 +65,13 @@ router.post(
   protect,
   authorize("ADMIN", "CASHIER"),
   controller.validatePaymentReferences
+);
+
+router.post(
+  "/payments/validate-documents",
+  protect,
+  authorize("ADMIN", "CASHIER"),
+  controller.validatePaymentDocuments
 );
 
 router.post(

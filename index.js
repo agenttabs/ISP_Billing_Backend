@@ -8,6 +8,7 @@ const expenseRoutes = require("./Routes/expense.routes");
 const napRoutes = require("./Routes/nap.routes");
 const netplanRoutes = require("./Routes/netplan.routes");
 const smsRoutes = require("./Routes/sms.routes");
+const smsGatewayRoutes = require("./Routes/sms-gateway.routes");
 const smsBatchRoutes = require("./Routes/sms-batch.routes");
 const smsPaymentRoutes = require("./Routes/sms-payment.routes");
 const emailNotificationRoutes = require("./Routes/email-notification.routes");
@@ -16,6 +17,7 @@ const systemRoutes = require("./Routes/system.routes");
 const transactionVerificationRoutes = require("./Routes/transaction-verification.routes");
 const clientBypassRoutes = require("./Routes/client-bypass.routes");
 const mikrotikCheckerRoutes = require("./Routes/mikrotik-checker.routes");
+const mikrotikConnectionRoutes = require("./Routes/mikrotik-connection.routes");
 const mikrotikDcBatchRoutes = require("./Routes/mikrotik-dc-batch.routes");
 const mikrotikDueDisconnectBatchRoutes = require("./Routes/mikrotik-due-disconnect-batch.routes");
 const { errorHandler } = require("./middleware/error.middleware");
@@ -35,13 +37,11 @@ const authRoutes = require("./Routes/auth.routes");
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(morgan("dev"));
 
-
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
 });
 app.use(limiter);
-
 
 // middleware
 app.use(cors());
@@ -54,6 +54,7 @@ app.use("/api", expenseRoutes);
 app.use("/api", napRoutes);
 app.use("/api", netplanRoutes);
 app.use("/api", smsRoutes);
+app.use("/api", smsGatewayRoutes);
 app.use("/api", smsBatchRoutes);
 app.use("/api", smsPaymentRoutes);
 app.use("/api", emailNotificationRoutes);
@@ -62,22 +63,27 @@ app.use("/api", systemRoutes);
 app.use("/api", transactionVerificationRoutes);
 app.use("/api", clientBypassRoutes);
 app.use("/api", mikrotikCheckerRoutes);
+app.use("/api", mikrotikConnectionRoutes);
 app.use("/api", mikrotikDcBatchRoutes);
 app.use("/api", mikrotikDueDisconnectBatchRoutes);
 app.use("/api/auth", authRoutes);
 
-//error handler
+// error handler
 app.use(errorHandler);
 
-connectDB().then(() => {
+const PORT = process.env.PORT || 5000;
+
+const startServer = async () => {
+  await connectDB();
+
   startEmailNotificationScheduler();
   startMikrotikCheckerScheduler();
   startMikrotikDcBatchScheduler();
   startMikrotikDueDisconnectBatchScheduler();
-});
 
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+};
 
-// start server
-app.listen(5000, () => {
-  console.log("🚀 Server running on http://localhost:5000");
-});
+startServer();

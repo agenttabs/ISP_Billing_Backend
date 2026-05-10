@@ -1,3 +1,5 @@
+const mongoose = require("mongoose");
+const collections = require("../config/collections");
 const {
   defaultMikrotikCheckerConfig,
   getConfigDocument,
@@ -65,7 +67,7 @@ exports.saveMikrotikCheckerConfig = async (req, res) => {
   }
 };
 
-exports.runMikrotikChecker = async (_req, res) => {
+exports.runMikrotikChecker = async (req, res) => {
   try {
     const report = await generateMikrotikCheckerReport();
     await writeAuditLog({

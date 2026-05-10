@@ -26,4 +26,18 @@ router.put(
   controller.updateSmsBatchProgram
 );
 
+router.get(
+  "/sms-batch-programs/:id/recipients",
+  protect,
+  authorize("ADMIN"),
+  controller.getSmsBatchProgramRecipients
+);
+
+router.post(
+  "/sms-batch-programs/:id/run-now",
+  protect,
+  authorize("ADMIN"),
+  controller.runSmsBatchProgramNow
+);
+
 module.exports = router;

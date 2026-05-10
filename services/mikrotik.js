@@ -1,29 +1,62 @@
 const mongoose = require("mongoose");
 const { RouterOSClient } = require("routeros-client");
 const collections = require("../config/collections");
+const normalizeServerType = (value) => String(value || "").trim().toUpperCase();
+const getRouterOsPort = (value) => {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 8728;
+};
 
 // 🔥 GET SERVER FROM DB
 const getMikrotikConfigAC = async () => {
-    const db = mongoose.connection.db;
-
     const servers = await mongoose.connection.db
         .collection(collections.servers)
-        .find({ ServerType: "AC" })
+        .find({ ServerType: { $regex: /^AC$/i } })
         .toArray();
 
     console.log("Servers found:", servers);
 
-    // pick first
-    const server = servers[0];
+    // pick default AC first, then any AC, then first record
+    const server =
+        servers.find((item) => Boolean(item.IsDefault)) ||
+        servers.find((item) => normalizeServerType(item.ServerType) === "AC") ||
+        servers[0];
 
     if (!server) {
         throw new Error("No MikroTik server found");
     }
 
-    return server;
+    return {
+        ...server,
+        ServerType: normalizeServerType(server.ServerType),
+        Port: getRouterOsPort(server.Port)
+    };
 };
 
 // ✅ CHECK PPP USER EXISTS
+const testMikrotikConnection = async (config = {}) => {
+    const client = new RouterOSClient({
+        host: config.Address,
+        user: config.User,
+        password: config.Password,
+        port: getRouterOsPort(config.Port)
+    });
+
+    try {
+        const conn = await client.connect();
+        const identityRows = await conn.menu("/system/identity").getAll().catch(() => []);
+
+        return {
+            success: true,
+            host: String(config.Address || "").trim(),
+            port: getRouterOsPort(config.Port),
+            identityName: String(identityRows?.[0]?.name || "").trim()
+        };
+    } finally {
+        client.close();
+    }
+};
+
 const checkPPPoEUser = async (username, location) => {
     const server = await getMikrotikConfigAC();
 
@@ -746,6 +779,100 @@ const clearIpoeLeaseComment = async ({ macAddress }) => {
     }
 };
 
+const setPPPoESecretDisconnected = async ({
+    username,
+    password = "",
+    profile = "dc-putol",
+    disconnectRemark = "",
+    location
+}) => {
+    if (!username) {
+        return null;
+    }
+
+    const server = await getMikrotikConfigAC();
+
+    const client = new RouterOSClient({
+        host: server.Address,
+        user: server.User,
+        password: server.Password,
+        port: parseInt(server.Port) || 8728
+    });
+
+    try {
+        const conn = await client.connect();
+        const profiles = await conn
+            .menu("/ppp/profile")
+            .where({})
+            .proplist(["name"])
+            .get();
+        const requestedProfile = String(profile || "").trim().toLowerCase();
+        const matchedProfile = (profiles || []).find(
+            (item) => String(item?.name || "").trim().toLowerCase() === requestedProfile
+        );
+
+        if (!matchedProfile?.name) {
+            const availableProfiles = (profiles || [])
+                .map((item) => String(item?.name || "").trim())
+                .filter(Boolean)
+                .join(", ");
+            throw new Error(
+                `PPPoE profile not found for disconnect: ${profile}. Available profiles: ${availableProfiles || "-"}`
+            );
+        }
+
+        const users = await conn
+            .menu("/ppp/secret")
+            .where({})
+            .proplist([".id", "name", "password"])
+            .get();
+
+        const target = users.find((user) => user.name === username);
+
+        if (!target?.id) {
+            throw new Error(`PPPoE secret not found for ${username}`);
+        }
+
+        await conn.menu("/ppp/secret").update(
+            {
+                name: username,
+                password: password || target.password || "",
+                profile: matchedProfile.name,
+                service: "pppoe",
+                comment: String(disconnectRemark || "").trim()
+            },
+            target.id
+        );
+
+        try {
+            const activeUsers = await conn
+                .menu("/ppp/active")
+                .where({ name: username })
+                .proplist([".id", "name"])
+                .get();
+
+            for (const active of activeUsers || []) {
+                const activeId = active[".id"] || active.id;
+                if (activeId) {
+                    await conn.menu("/ppp/active").remove(activeId);
+                }
+            }
+        } catch (err) {
+            if (!isRouterOsEmptyReplyError(err)) {
+                throw err;
+            }
+        }
+
+        return {
+            username,
+            profile: matchedProfile.name,
+            comment: String(disconnectRemark || "").trim()
+        };
+    } finally {
+        client.close();
+    }
+};
+
 const getClientMikrotikStatus = async ({
     authMode,
     accountName,
@@ -778,47 +905,46 @@ const getClientMikrotikStatus = async ({
         const conn = await client.connect();
 
         if (normalizedAuthMode === "PPPOE") {
+            const targetAccountName = String(accountName || "").trim();
+            const loadPppRows = async (path) => {
+                try {
+                    return await conn
+                        .menu(path)
+                        .where({ name: targetAccountName })
+                        .get();
+                } catch (err) {
+                    if (isRouterOsEmptyReplyError(err)) {
+                        console.log(`⚠️ MikroTik returned !empty while reading ${path} for ${targetAccountName}`);
+                        return [];
+                    }
+
+                    throw err;
+                }
+            };
+
             const [secrets, activeUsers] = await Promise.all([
-                conn.menu("/ppp/secret").getAll(),
-                conn.menu("/ppp/active").getAll().catch(() => [])
+                loadPppRows("/ppp/secret"),
+                Promise.resolve([])
             ]);
 
-            const secret = secrets.find(
-                (item) => String(item.name || "").trim() === String(accountName || "").trim()
-            );
-            const active = activeUsers.find(
-                (item) => String(item.name || "").trim() === String(accountName || "").trim()
-            );
+            const secret = Array.isArray(secrets)
+                ? secrets.find(
+                    (item) => String(item.name || "").trim() === targetAccountName
+                )
+                : null;
 
             const plan = String(
-                active?.profile || secret?.profile || ""
+                secret?.profile || ""
             ).trim();
-            const ipAddress = String(
-                active?.address || active?.["address"] || active?.callerid || ""
-            ).trim();
-            const rxBytes = getTrafficValue(
-                active,
-                "bytes-in",
-                "rx-byte",
-                "rx-bytes",
-                "rx"
-            );
-            const txBytes = getTrafficValue(
-                active,
-                "bytes-out",
-                "tx-byte",
-                "tx-bytes",
-                "tx"
-            );
 
             return {
                 authMode: normalizedAuthMode,
-                status: active ? "ACTIVE" : secret ? "INACTIVE" : "NOT FOUND",
-                ipAddress,
+                status: secret ? "FOUND_IN_SECRET" : "NOT FOUND",
+                ipAddress: "",
                 plan,
-                rxBytes,
-                txBytes,
-                graphAvailable: Boolean(active)
+                rxBytes: 0,
+                txBytes: 0,
+                graphAvailable: false
             };
         }
 
@@ -878,6 +1004,21 @@ const getClientMikrotikStatus = async ({
             txBytes: 0,
             graphAvailable: false
         };
+    } catch (err) {
+        if (isRouterOsEmptyReplyError(err)) {
+            console.log(`⚠️ MikroTik status query returned !empty for ${accountName || macAddress || "-"}`);
+            return {
+                authMode: normalizedAuthMode,
+                status: "UNKNOWN",
+                ipAddress: "",
+                plan: "",
+                rxBytes: 0,
+                txBytes: 0,
+                graphAvailable: false
+            };
+        }
+
+        throw err;
     } finally {
         client.close();
     }
@@ -1128,10 +1269,12 @@ module.exports = {
     checkPPPoEUser,
     clearIpoeLeaseComment,
     getMikrotikConfigAC,
+    testMikrotikConnection,
     getDhcpLeaseByMacAddress,
     getDhcpLeasesNoComment,
     getDhcpLeasesWithComments,
     setIpoeLeaseStatic,
+    setPPPoESecretDisconnected,
     getClientMikrotikStatus,
     getMikrotikCheckerSnapshot,
     updatePPPoEUser: updatePPPoEUserSafe,

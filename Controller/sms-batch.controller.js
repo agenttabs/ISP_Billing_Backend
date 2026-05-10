@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
+const { replaceSmsTokens, sendDirectSms } = require("../services/sms.service");
+const MANILA_TIMEZONE = "Asia/Manila";
 
 const sanitizeBatchProgram = (program) => ({
   _id: program._id,
@@ -12,6 +14,178 @@ const sanitizeBatchProgram = (program) => ({
   Body: String(program.Body || ""),
   IsActive: Boolean(program.IsActive)
 });
+
+const getManilaDateParts = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: MANILA_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+
+  const valueByType = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+
+  return {
+    year: Number(valueByType.year || 0),
+    month: Number(valueByType.month || 0),
+    day: Number(valueByType.day || 0)
+  };
+};
+
+const getManilaDateKey = (date = new Date()) => {
+  const parts = getManilaDateParts(date);
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+};
+
+const addDays = (value, days) => {
+  const next = new Date(value);
+  next.setDate(next.getDate() + Number(days || 0));
+  return next;
+};
+
+const hasContactNumber = (client) => Boolean(String(
+  client?.ContactNumber || client?.Mobile || client?.Phone || ""
+).trim());
+
+const isDisconnectedClient = (client) => {
+  const values = [client?.Profile, client?.NetPlan, client?.Status]
+    .map((value) => String(value || "").trim().toUpperCase());
+
+  return values.some((value) =>
+    value.includes("DISCONNECTION") ||
+    value.includes("DISCONNECTED") ||
+    value === "DC-PUTOL" ||
+    value === "0M/0M"
+  );
+};
+
+const isUnpaidClient = (client) => {
+  const paymentStatus = String(client?.PaymentStatus || "").trim().toUpperCase();
+  const amountDue = Number(client?.AmountDue ?? client?.amountDue ?? 0);
+
+  if (paymentStatus && paymentStatus !== "PAID") {
+    return true;
+  }
+
+  return Number.isFinite(amountDue) && amountDue > 0;
+};
+
+const formatRecipientRow = (client) => ({
+  _id: client?._id,
+  ClientName: String(client?.ClientName || "").trim() || "-",
+  AccountName: String(client?.AccountName || "").trim() || "-",
+  AccountNumber: String(client?.AccountNumber || "").trim() || "-",
+  ContactNumber: String(client?.ContactNumber || client?.Mobile || client?.Phone || "").trim() || "-",
+  DueDate: client?.DueDate || null,
+  AmountDue: Number(client?.AmountDue ?? client?.amountDue ?? 0) || 0,
+  PaymentStatus: String(client?.PaymentStatus || "").trim() || "-",
+  NetPlan: String(client?.NetPlan || client?.Profile || "").trim() || "-"
+});
+
+const formatCurrency = (value) =>
+  `PHP ${Number(value || 0).toLocaleString("en-PH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`;
+
+const formatDate = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: MANILA_TIMEZONE
+  });
+};
+
+const addOneMonthAnchored = (value, preferredDay) => {
+  if (!value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const originalDay = Number(preferredDay) || date.getDate();
+  const originalMonth = date.getMonth();
+  const originalYear = date.getFullYear();
+  const lastDayOfNextMonth = new Date(originalYear, originalMonth + 2, 0).getDate();
+  const safeDay = Math.min(originalDay, lastDayOfNextMonth);
+
+  return new Date(originalYear, originalMonth + 1, safeDay, 12, 0, 0, 0);
+};
+
+const getStatementRange = (client) => {
+  if (!client?.DueDate) return { start: null, end: null };
+
+  const start = new Date(client.DueDate);
+  if (Number.isNaN(start.getTime())) return { start: null, end: null };
+
+  const anchorDay = Number(client.SubscriptionCover) || start.getDate();
+  const nextDue = addOneMonthAnchored(start, anchorDay);
+
+  if (!nextDue) return { start, end: null };
+
+  const end = new Date(nextDue);
+  end.setDate(end.getDate() - 1);
+
+  return { start, end };
+};
+
+const buildTemplateValues = (client) => {
+  const statementRange = getStatementRange(client);
+  const previousBalance = Math.max(Number(client?.Balance || 0), 0);
+  const monthlyDue = Number(client?.AmountDue || 0);
+  const totalAmountDue = monthlyDue + previousBalance;
+  const subscriptionCover =
+    statementRange.start && statementRange.end
+      ? `${formatDate(statementRange.start)} to ${formatDate(statementRange.end)}`
+      : "-";
+
+  return {
+    ClientName: client?.ClientName || client?.AccountName || "",
+    AccountName: client?.AccountName || "",
+    AccountNumber: client?.AccountNumber || "",
+    ContactNumber: client?.ContactNumber || client?.Mobile || client?.Phone || "",
+    TotalAmountDue: formatCurrency(totalAmountDue),
+    MonthlyDue: formatCurrency(monthlyDue),
+    DueDate: formatDate(client?.DueDate),
+    SubscriptionCover: subscriptionCover
+  };
+};
+
+const getProgramRecipients = async (program) => {
+  const clients = await mongoose.connection.db
+    .collection(collections.clients)
+    .find({})
+    .toArray();
+
+  const todayKey = getManilaDateKey();
+  const daysOffset = Number(program?.DaysOffset || 0);
+
+  return clients.filter((client) => {
+    if (!hasContactNumber(client)) return false;
+    if (isDisconnectedClient(client)) return false;
+    if (!isUnpaidClient(client)) return false;
+
+    const dueDate = client?.DueDate ? new Date(client.DueDate) : null;
+    if (!dueDate || Number.isNaN(dueDate.getTime())) {
+      return false;
+    }
+
+    const scheduledDate = addDays(dueDate, daysOffset);
+    return getManilaDateKey(scheduledDate) === todayKey;
+  });
+};
 
 exports.getSmsBatchPrograms = async (_req, res) => {
   try {
@@ -127,28 +301,31 @@ exports.updateSmsBatchProgram = async (req, res) => {
       });
     }
 
-    const result = await collection.findOneAndUpdate(
+    const update = {
+      $set: {
+        Name,
+        TemplateType,
+        RecipientRule,
+        DaysOffset,
+        SendTime,
+        Body,
+        IsActive,
+        updatedAt: new Date()
+      }
+    };
+
+    const updateResult = await collection.updateOne(
       { _id: objectId },
-      {
-        $set: {
-          Name,
-          TemplateType,
-          RecipientRule,
-          DaysOffset,
-          SendTime,
-          Body,
-          IsActive,
-          updatedAt: new Date()
-        }
-      },
-      { returnDocument: "after" }
+      update
     );
 
-    if (!result.value) {
+    if (!updateResult.matchedCount) {
       return res.status(404).json({ error: "Batch program not found." });
     }
 
-    res.json(sanitizeBatchProgram(result.value));
+    const updatedProgram = await collection.findOne({ _id: objectId });
+
+    res.json(sanitizeBatchProgram(updatedProgram));
 
     await writeAuditLog({
       req,
@@ -158,7 +335,111 @@ exports.updateSmsBatchProgram = async (req, res) => {
       targetId: id,
       status: "SUCCESS",
       summary: "SMS batch program updated.",
-      values: sanitizeBatchProgram(result.value)
+      values: sanitizeBatchProgram(updatedProgram)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getSmsBatchProgramRecipients = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid batch program id." });
+    }
+
+    const objectId = new mongoose.Types.ObjectId(id);
+    const program = await mongoose.connection.db
+      .collection(collections.smsBatchProgram)
+      .findOne({ _id: objectId });
+
+    if (!program) {
+      return res.status(404).json({ error: "Batch program not found." });
+    }
+
+    const recipients = await getProgramRecipients(program);
+
+    res.json({
+      program: sanitizeBatchProgram(program),
+      totalRecipients: recipients.length,
+      recipients: recipients.map(formatRecipientRow)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.runSmsBatchProgramNow = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid batch program id." });
+    }
+
+    const objectId = new mongoose.Types.ObjectId(id);
+    const program = await mongoose.connection.db
+      .collection(collections.smsBatchProgram)
+      .findOne({ _id: objectId });
+
+    if (!program) {
+      return res.status(404).json({ error: "Batch program not found." });
+    }
+
+    const recipients = await getProgramRecipients(program);
+    let sent = 0;
+    let skipped = 0;
+    const errors = [];
+
+    for (const client of recipients) {
+      try {
+        const message = replaceSmsTokens(String(program.Body || ""), buildTemplateValues(client));
+        const result = await sendDirectSms({
+          recipient: client?.ContactNumber || client?.Mobile || client?.Phone || "",
+          message
+        });
+
+        if (result?.sent) {
+          sent += 1;
+        } else {
+          skipped += 1;
+          errors.push(
+            `${client?.AccountName || client?.ClientName || "Client"}: ${result?.reason || "SMS skipped."}`
+          );
+        }
+      } catch (err) {
+        skipped += 1;
+        errors.push(
+          `${client?.AccountName || client?.ClientName || "Client"}: ${err.message}`
+        );
+      }
+    }
+
+    const summary = `Sent ${sent} SMS, skipped ${skipped} SMS.`;
+
+    res.json({
+      sent,
+      skipped,
+      totalRecipients: recipients.length,
+      reason: summary,
+      errors
+    });
+
+    await writeAuditLog({
+      req,
+      module: "SMS_BATCH",
+      action: "RUN_NOW",
+      targetType: "SMS_BATCH_PROGRAM",
+      targetId: id,
+      status: skipped > 0 && sent === 0 ? "FAILED" : "SUCCESS",
+      summary: `SMS batch program run now executed. ${summary}`,
+      details: {
+        program: sanitizeBatchProgram(program),
+        totalRecipients: recipients.length,
+        errors
+      }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

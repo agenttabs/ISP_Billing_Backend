@@ -10,11 +10,11 @@ const defaultEmailNotificationConfig = () => ({
   Name: "Billing SOA Notification",
   DaysOffset: 0,
   SendTime: "08:00",
-  Subject: "DNS Internet Billing Statement - @BillingMonth@",
+  Subject: "DNS NETWORKS Billing Statement - @BillingMonth@",
   Body: [
     "Hi @ClientName@,",
     "",
-    "Attached is your DNS Internet billing statement.",
+    "Attached is your DNS NETWORKS billing statement.",
     "",
     "Account Number: @AccountNumber@",
     "Monthly Due: @MonthlyDue@",
@@ -29,7 +29,7 @@ const defaultEmailNotificationConfig = () => ({
   SmtpSecure: false,
   SmtpUser: "",
   SmtpPassword: "",
-  FromName: "DNS INTERNET",
+  FromName: "DNS NETWORKS",
   IsActive: false,
   ManualClientIds: [],
   LastRunKey: "",
@@ -53,7 +53,7 @@ const getGmailDefaults = async () => {
       SmtpPort: Number(document["SMTP PORT"] || 587),
       SmtpUser: String(document.Username || "").trim(),
       SmtpPassword: String(document.Password || ""),
-      FromName: String(document.GMID || "").trim() || "DNS INTERNET"
+      FromName: String(document.GMID || "").trim() || "DNS NETWORKS"
     };
   } catch (_err) {
     return {};
@@ -243,7 +243,7 @@ const buildBillingPdfBuffer = (client, history = []) => {
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(20);
-  doc.text("DNS INTERNET", 18, 14);
+  doc.text("DNS NETWORKS", 18, 14);
   doc.setFontSize(12);
   doc.setFont("helvetica", "normal");
   doc.text(statementTitle, 18, 22);
