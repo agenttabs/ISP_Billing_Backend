@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+﻿const mongoose = require("mongoose");
 const { ObjectId } = mongoose.Types;
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
@@ -139,6 +139,7 @@ const enrichPrintRowWithEarning = (row, earningLookup) => {
 
   return {
     ...row,
+    TransactionDate: matchedEarning?.TransactionDate || row?.TransactionDate || row?.PaymentDate || row?.createdAt,
     PaymentMethod: row?.PaymentMethod || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
     MOP: row?.MOP || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
     MOPRef: matchedEarning?.MOPRef || row?.MOPRef || "",
@@ -354,3 +355,4 @@ exports.verifyTransactions = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
