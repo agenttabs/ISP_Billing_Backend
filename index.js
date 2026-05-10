@@ -1,4 +1,5 @@
 const express = require("express");
+const http = require("http");
 const cors = require("cors");
 
 const connectDB = require("./config/db.runtime");
@@ -29,23 +30,28 @@ const {
 } = require("./services/mikrotik-due-disconnect-batch.service");
 
 const app = express();
+const server = http.createServer(app);
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const authRoutes = require("./Routes/auth.routes");
+const { initRealtime } = require("./services/realtime.service");
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(morgan("dev"));
 
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-});
-app.use(limiter);
-
 // middleware
 app.use(cors());
 app.use(express.json());
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === "OPTIONS",
+});
+app.use(limiter);
 
 // routes
 app.use("/api", clientRoutes);
@@ -81,7 +87,9 @@ const startServer = async () => {
   startMikrotikDcBatchScheduler();
   startMikrotikDueDisconnectBatchScheduler();
 
-  app.listen(PORT, () => {
+  initRealtime(server);
+
+  server.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 };

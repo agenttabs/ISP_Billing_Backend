@@ -185,6 +185,12 @@ exports.createClient = async (req, res) => {
       });
     }
 
+    emitClientsChanged({
+      action: "create",
+      clientId: String(result.insertedId),
+      accountName: data.AccountName || ""
+    });
+
     res.json({
       _id: result.insertedId,
       ...data
@@ -399,6 +405,12 @@ exports.updateClient = async (req, res) => {
 
     }
 
+    emitClientsChanged({
+      action: "update",
+      clientId: String(id),
+      accountName: nextAccountName || oldClient.AccountName || ""
+    });
+
     res.json({ message: "Client network settings updated successfully" });
 
     await writeAuditLog({
@@ -480,6 +492,12 @@ exports.adjustClientDueDate = async (req, res) => {
           }
         }
       );
+
+    emitClientsChanged({
+      action: "adjust-due-date",
+      clientId: String(id),
+      accountName: existingClient.AccountName || ""
+    });
 
     res.json({ message: "Client due date updated successfully." });
 
