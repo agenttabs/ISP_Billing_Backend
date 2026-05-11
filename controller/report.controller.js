@@ -645,6 +645,10 @@ const enrichPrintHistoryRowWithEarning = (row, earningLookup) => {
 
   return {
     ...row,
+    Verified: row?.Verified === true,
+    VerifiedAt: row?.VerifiedAt || "",
+    VerifiedBy: row?.VerifiedBy || "",
+    VerifiedById: row?.VerifiedById || "",
     PaymentMethod: row?.PaymentMethod || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
     MOP: row?.MOP || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
     MOPRef:
@@ -1283,10 +1287,66 @@ exports.getEarnings = async (req, res) => {
   try {
     const db = mongoose.connection.db;
     const earningsCollection = db.collection(collections.earnings);
+    const printCollection = db.collection(collections.print);
     const userType = String(req.user.type || req.user.role || "").toUpperCase();
-    const earnings = await earningsCollection.find({}).toArray();
+    const [earnings, printRows] = await Promise.all([
+      earningsCollection.find({}).toArray(),
+      printCollection.find({}).toArray()
+    ]);
 
-    let filteredEarnings = earnings;
+    const verificationLookup = new Map();
+
+    const getVerificationCandidates = (row = {}) =>
+      [
+        row?.Invoice,
+        row?.PaymentReceipt,
+        row?.TransactionCode,
+        row?.MOPRef,
+        row?.ReferenceNumber,
+        row?.VerifiedReference
+      ]
+        .map((value) => normalizeReferenceValue(value))
+        .filter(Boolean);
+
+    printRows.forEach((row) => {
+      getVerificationCandidates(row).forEach((key) => {
+        if (key && !verificationLookup.has(key)) {
+          verificationLookup.set(key, row);
+        }
+      });
+    });
+
+    const enrichEarningVerification = (row) => {
+      const matchedPrint = getVerificationCandidates(row)
+        .map((key) => verificationLookup.get(key))
+        .find(Boolean);
+
+      if (!matchedPrint) {
+        return {
+          ...row,
+          Verified: row?.Verified === true,
+          VerifiedAt: row?.VerifiedAt || "",
+          VerifiedBy: row?.VerifiedBy || "",
+          VerifiedById: row?.VerifiedById || "",
+          VerificationMethod: row?.VerificationMethod || "",
+          VerifiedReference: row?.VerifiedReference || "",
+          VerificationComment: row?.VerificationComment || ""
+        };
+      }
+
+      return {
+        ...row,
+        Verified: matchedPrint?.Verified === true,
+        VerifiedAt: matchedPrint?.VerifiedAt || row?.VerifiedAt || "",
+        VerifiedBy: matchedPrint?.VerifiedBy || row?.VerifiedBy || "",
+        VerifiedById: matchedPrint?.VerifiedById || row?.VerifiedById || "",
+        VerificationMethod: matchedPrint?.VerificationMethod || row?.VerificationMethod || "",
+        VerifiedReference: matchedPrint?.VerifiedReference || row?.VerifiedReference || "",
+        VerificationComment: matchedPrint?.VerificationComment || row?.VerificationComment || ""
+      };
+    };
+
+    let filteredEarnings = earnings.map(enrichEarningVerification);
 
     if (userType === "CASHIER") {
       const { start, end } = getTodayRange();
