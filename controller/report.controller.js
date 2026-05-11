@@ -1148,6 +1148,137 @@ exports.validatePaymentDocuments = async (req, res) => {
   }
 };
 
+exports.validatePaymentReferences = async (req, res) => {
+  try {
+    const requestedEntries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const normalizedEntries = requestedEntries
+      .map((entry) => ({
+        method: normalizePaymentMethod(entry?.method),
+        amount: Number(entry?.amount || 0),
+        reference: normalizeReferenceValue(entry?.reference),
+        receiptAmount: Number(entry?.receiptAmount || 0)
+      }))
+      .filter(
+        (entry) =>
+          entry.method &&
+          entry.method !== "CASH" &&
+          entry.reference &&
+          Number.isFinite(entry.amount) &&
+          entry.amount > 0
+      );
+
+    if (!normalizedEntries.length) {
+      return res.json({ valid: true, refs: [] });
+    }
+
+    const requestedByReference = normalizedEntries.reduce((map, entry) => {
+      const existing = map.get(entry.reference) || {
+        reference: entry.reference,
+        requestedAmount: 0,
+        receiptAmount: 0
+      };
+
+      existing.requestedAmount += Number(entry.amount || 0);
+      existing.receiptAmount = Math.max(existing.receiptAmount, Number(entry.receiptAmount || 0));
+      map.set(entry.reference, existing);
+      return map;
+    }, new Map());
+
+    const references = [...requestedByReference.keys()];
+    const db = mongoose.connection.db;
+    const earningRows = await db
+      .collection(collections.earnings)
+      .find({
+        $or: [
+          { MOPRef: { $in: references } },
+          { ReferenceNumber: { $in: references } },
+          { "PaymentBreakdown.Reference": { $in: references } }
+        ]
+      })
+      .toArray();
+
+    const usageByReference = new Map();
+
+    references.forEach((reference) => {
+      usageByReference.set(reference, {
+        usedAmount: 0,
+        receiptAmount: 0,
+        usedByAccounts: new Set()
+      });
+    });
+
+    earningRows.forEach((row) => {
+      const accountName = String(row?.AccountName || row?.ClientName || row?.Name || "").trim();
+      getPaymentBreakdownLines(row).forEach((line) => {
+        if (!references.includes(line.Reference)) {
+          return;
+        }
+
+        const usage = usageByReference.get(line.Reference);
+        if (!usage) {
+          return;
+        }
+
+        usage.usedAmount += Number(line.Amount || 0);
+        usage.receiptAmount = Math.max(usage.receiptAmount, Number(line.ReceiptAmount || 0));
+        if (accountName) {
+          usage.usedByAccounts.add(accountName);
+        }
+      });
+    });
+
+    const refs = references.map((reference) => {
+      const requested = requestedByReference.get(reference);
+      const usage = usageByReference.get(reference) || {
+        usedAmount: 0,
+        receiptAmount: 0,
+        usedByAccounts: new Set()
+      };
+
+      const allowedAmount = Math.max(
+        Number(requested?.receiptAmount || 0),
+        Number(usage?.receiptAmount || 0)
+      );
+      const totalAfterSave = Number(usage.usedAmount || 0) + Number(requested?.requestedAmount || 0);
+      const exceeds = allowedAmount > 0 && totalAfterSave > allowedAmount + 0.0001;
+
+      return {
+        reference,
+        requestedAmount: Number(requested?.requestedAmount || 0),
+        receiptAmount: allowedAmount,
+        alreadyUsedAmount: Number(usage.usedAmount || 0),
+        totalAfterSave,
+        exceeds,
+        usedByAccounts: [...usage.usedByAccounts]
+      };
+    });
+
+    const exceededRefs = refs.filter((item) => item.exceeds);
+
+    if (exceededRefs.length) {
+      return res.status(409).json({
+        valid: false,
+        error: `Reference amount exceeded for: ${exceededRefs
+          .map(
+            (item) =>
+              `${item.reference} (used ${item.alreadyUsedAmount.toFixed(2)} + current ${item.requestedAmount.toFixed(
+                2
+              )} > receipt ${item.receiptAmount.toFixed(2)})`
+          )
+          .join(", ")}.`,
+        refs
+      });
+    }
+
+    return res.json({
+      valid: true,
+      refs
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 exports.getEarnings = async (req, res) => {
   try {
     const db = mongoose.connection.db;

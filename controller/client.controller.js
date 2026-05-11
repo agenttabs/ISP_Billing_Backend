@@ -43,6 +43,14 @@ const parseAmountValue = (value) => {
 
 const PPP_DISCONNECTED_PROFILE = "dc-putol";
 
+const buildDisconnectedClientFilter = () => ({
+  $or: [
+    { Status: { $regex: /DISCONNECTED/i } },
+    { Profile: { $regex: /DISCONNECTION/i } },
+    { NetPlan: { $regex: /DISCONNECTION/i } }
+  ]
+});
+
 const getIpoeModemStatus = (lease) => {
   if (!lease) {
     return "NO MAC FOUND";
@@ -717,6 +725,66 @@ exports.getClientMikrotikStatus = async (req, res) => {
     });
   } catch (err) {
     console.error("CLIENT MIKROTIK STATUS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getClients = async (req, res) => {
+  try {
+    const collection = mongoose.connection.db.collection(collections.clients);
+    const status = String(req.query?.status || "ACTIVE").trim().toUpperCase();
+    const rawSearch = String(req.query?.search || "").trim();
+    const page = Math.max(Number.parseInt(req.query?.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(Number.parseInt(req.query?.limit, 10) || 10, 1), 100);
+    const skip = (page - 1) * limit;
+
+    const disconnectedFilter = buildDisconnectedClientFilter();
+    const statusFilter =
+      status === "DISCONNECTED"
+        ? disconnectedFilter
+        : { $nor: disconnectedFilter.$or };
+
+    const query = { ...statusFilter };
+
+    if (rawSearch) {
+      const escapedSearch = rawSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const searchRegex = new RegExp(`(?:^|[\\s_-])${escapedSearch}`, "i");
+
+      query.$and = [
+        ...(query.$and || []),
+        {
+          $or: [
+            { AccountName: searchRegex },
+            { ClientName: searchRegex }
+          ]
+        }
+      ];
+    }
+
+    const [rows, total, activeCount, disconnectedCount] = await Promise.all([
+      collection
+        .find(query)
+        .sort({ AccountName: 1, ClientName: 1, _id: 1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+      collection.countDocuments(query),
+      collection.countDocuments({ $nor: disconnectedFilter.$or }),
+      collection.countDocuments(disconnectedFilter)
+    ]);
+
+    res.json({
+      rows,
+      meta: {
+        total,
+        activeCount,
+        disconnectedCount,
+        page,
+        limit
+      }
+    });
+  } catch (err) {
+    console.error("CLIENT SEARCH QUERY ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };

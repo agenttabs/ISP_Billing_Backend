@@ -75,6 +75,13 @@ router.post(
 );
 
 router.post(
+  "/payments/validate-references",
+  protect,
+  authorize("ADMIN", "CASHIER"),
+  controller.validatePaymentReferences
+);
+
+router.post(
   "/transactions",
   protect,
   authorize("ADMIN", "CASHIER"),
