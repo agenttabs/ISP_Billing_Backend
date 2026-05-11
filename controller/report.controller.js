@@ -267,6 +267,11 @@ const normalizeReferenceValue = (value) =>
     .trim()
     .toUpperCase();
 
+const normalizeCommentValue = (value) =>
+  String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const normalizePaymentMethod = (value) =>
   String(value || "")
     .trim()
