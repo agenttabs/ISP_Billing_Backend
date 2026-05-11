@@ -69,6 +69,10 @@ function transform(record) {
     TelegramToken: cleanString(record.TelegramToken),
     Note: cleanString(record.Note),
     MacAddress: record.MacAddress ? cleanString(record.MacAddress) : null,
+    PreviousAuthenticationMode: cleanString(record.PreviousAuthenticationMode),
+    PreviousProfile: cleanString(record.PreviousProfile),
+    PreviousNetPlan: cleanString(record.PreviousNetPlan),
+    PreviousMacAddress: cleanString(record.PreviousMacAddress),
   };
 }
 
