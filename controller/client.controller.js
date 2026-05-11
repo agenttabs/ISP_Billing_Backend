@@ -6,6 +6,7 @@ const {
   getSmsTemplateByType,
   replaceSmsTokens
 } = require("../services/sms.service");
+const { emitClientsChanged } = require("../services/realtime.service");
 
 const { addPPPoEUser, addIpoeDisconnectScheduler, checkPPPoEUser, clearIpoeLeaseComment, updatePPPoEUser, disconnectPPPoEUser, addDisconnectScheduler, removeScheduler, getDhcpLeaseByMacAddress, getDhcpLeasesNoComment, getDhcpLeasesWithComments, setIpoeLeaseStatic, getClientMikrotikStatus } = require("../services/mikrotik");
 

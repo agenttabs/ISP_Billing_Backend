@@ -1025,6 +1025,57 @@ exports.createEarning = async (req, res) => {
   }
 };
 
+exports.rollbackPaymentSave = async (req, res) => {
+  try {
+    const earningId = req.body?.earningId;
+    const transactionId = req.body?.transactionId;
+
+    const rollbackSummary = {
+      earningDeleted: false,
+      transactionDeleted: false
+    };
+
+    if (earningId) {
+      const earningDeleteResult = await mongoose.connection.db
+        .collection(collections.earnings)
+        .deleteOne({ _id: new mongoose.Types.ObjectId(String(earningId)) });
+
+      rollbackSummary.earningDeleted = earningDeleteResult.deletedCount > 0;
+    }
+
+    if (transactionId) {
+      const transactionDeleteResult = await mongoose.connection.db
+        .collection(collections.print)
+        .deleteOne({ _id: new mongoose.Types.ObjectId(String(transactionId)) });
+
+      rollbackSummary.transactionDeleted = transactionDeleteResult.deletedCount > 0;
+    }
+
+    await writeAuditLog({
+      req,
+      module: "PAYMENT",
+      action: "ROLLBACK",
+      targetType: "PAYMENT_SAVE",
+      targetId: transactionId || earningId || "",
+      accountName: req.body?.AccountName || "",
+      status: "SUCCESS",
+      summary: "Rolled back partially saved payment records.",
+      values: {
+        earningId: earningId || "",
+        transactionId: transactionId || "",
+        ...rollbackSummary
+      }
+    });
+
+    res.json({
+      success: true,
+      ...rollbackSummary
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.getNextPaymentReceiptNumber = async (req, res) => {
   try {
     const requestedDate = req.query.date

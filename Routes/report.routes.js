@@ -95,6 +95,13 @@ router.post(
   controller.createEarning
 );
 
+router.post(
+  "/payments/rollback",
+  protect,
+  authorize("ADMIN", "CASHIER"),
+  controller.rollbackPaymentSave
+);
+
 router.get(
   "/earnings",
   protect,
