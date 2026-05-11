@@ -280,10 +280,13 @@ const getPaymentBreakdownLines = (row) => {
         Amount: Number(line?.Amount || 0),
         Reference: normalizeReferenceValue(line?.Reference),
         ReceiptAmount: Number(line?.ReceiptAmount || line?.Amount || 0),
-        TransferDate: normalizeCommentValue(
-          line?.TransferDate || line?.DateOfTransfer || line?.GCashTransferDate || row?.TransferDate || row?.GCashTransferDate
-        )
-      }))
+          TransferDate: normalizeCommentValue(
+            line?.TransferDate || line?.DateOfTransfer || line?.GCashTransferDate || row?.TransferDate || row?.GCashTransferDate
+          ),
+          ReceiverLast4: normalizeCommentValue(
+            line?.ReceiverLast4 || line?.GCashReceiverLast4 || row?.ReceiverLast4 || row?.GCashReceiverLast4
+          )
+        }))
       .filter((line) => line.Method && line.Amount > 0);
   }
 
@@ -304,11 +307,15 @@ const getPaymentBreakdownLines = (row) => {
             ),
       ReceiptAmount: Number(row?.ReceiptAmount || row?.TotalAmount || row?.Cash || 0),
       TransferDate:
-        paymentMethod === "CASH"
-          ? ""
-          : normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate)
-    }
-  ].filter((line) => line.Amount > 0);
+          paymentMethod === "CASH"
+            ? ""
+            : normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate),
+        ReceiverLast4:
+          paymentMethod === "CASH"
+            ? ""
+            : normalizeCommentValue(row?.ReceiverLast4 || row?.GCashReceiverLast4)
+      }
+    ].filter((line) => line.Amount > 0);
 };
 
 const getTopLevelPaymentFields = (row) => {
@@ -323,6 +330,12 @@ const getTopLevelPaymentFields = (row) => {
     paymentBreakdown
       .filter((line) => line.Method !== "CASH" && line.TransferDate)
       .map((line) => normalizeCommentValue(line.TransferDate))
+      .filter(Boolean)
+  )];
+  const nonCashReceiverLast4 = [...new Set(
+    paymentBreakdown
+      .filter((line) => line.Method !== "CASH" && line.ReceiverLast4)
+      .map((line) => normalizeCommentValue(line.ReceiverLast4))
       .filter(Boolean)
   )];
 
@@ -349,7 +362,15 @@ const getTopLevelPaymentFields = (row) => {
     GCashTransferDate:
       nonCashTransferDates.length === 1
         ? nonCashTransferDates[0]
-        : normalizeCommentValue(row?.GCashTransferDate || row?.TransferDate)
+        : normalizeCommentValue(row?.GCashTransferDate || row?.TransferDate),
+    ReceiverLast4:
+      nonCashReceiverLast4.length === 1
+        ? nonCashReceiverLast4[0]
+        : normalizeCommentValue(row?.ReceiverLast4 || row?.GCashReceiverLast4),
+    GCashReceiverLast4:
+      nonCashReceiverLast4.length === 1
+        ? nonCashReceiverLast4[0]
+        : normalizeCommentValue(row?.GCashReceiverLast4 || row?.ReceiverLast4)
   };
 };
 
@@ -481,8 +502,15 @@ const buildDashboardCollectionRows = (rows = [], method) => {
             .filter(Boolean)
             .join(", ") ||
           normalizeCommentValue(row.TransferDate || row.GCashTransferDate) ||
-          "",
-        accountName: row.AccountName || "-",
+            "",
+          receiverLast4:
+            matchingLines
+              .map((line) => normalizeCommentValue(line.ReceiverLast4))
+              .filter(Boolean)
+              .join(", ") ||
+            normalizeCommentValue(row.ReceiverLast4 || row.GCashReceiverLast4) ||
+            "",
+          accountName: row.AccountName || "-",
         clientName: row.ClientName || row.Name || row.Item || "-",
         method: normalizedMethod,
         reference: matchingLines.map((line) => line.Reference).filter(Boolean).join(", ") || "-",

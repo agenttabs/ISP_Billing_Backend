@@ -156,6 +156,18 @@ const enrichPrintRowWithEarning = (row, earningLookup) => {
       row?.GCashTransferDate ||
       row?.TransferDate ||
       "",
+    ReceiverLast4:
+      matchedEarning?.ReceiverLast4 ||
+      matchedEarning?.GCashReceiverLast4 ||
+      row?.ReceiverLast4 ||
+      row?.GCashReceiverLast4 ||
+      "",
+    GCashReceiverLast4:
+      matchedEarning?.GCashReceiverLast4 ||
+      matchedEarning?.ReceiverLast4 ||
+      row?.GCashReceiverLast4 ||
+      row?.ReceiverLast4 ||
+      "",
     PaymentMethod: row?.PaymentMethod || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
     MOP: row?.MOP || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
     MOPRef: matchedEarning?.MOPRef || row?.MOPRef || "",
@@ -170,10 +182,13 @@ const getPaymentBreakdownLines = (row) => {
         Method: normalizeLineMethod(line?.Method || line?.PaymentMethod),
         Amount: Number(line?.Amount || 0),
         Reference: normalizeReferenceValue(line?.Reference),
-        TransferDate: normalizeCommentValue(
-          line?.TransferDate || line?.DateOfTransfer || line?.GCashTransferDate || row?.TransferDate || row?.GCashTransferDate
-        )
-      }))
+          TransferDate: normalizeCommentValue(
+            line?.TransferDate || line?.DateOfTransfer || line?.GCashTransferDate || row?.TransferDate || row?.GCashTransferDate
+          ),
+          ReceiverLast4: normalizeCommentValue(
+            line?.ReceiverLast4 || line?.GCashReceiverLast4 || row?.ReceiverLast4 || row?.GCashReceiverLast4
+          )
+        }))
       .filter((line) => line.Method && line.Amount > 0);
   }
 
@@ -203,8 +218,9 @@ const getPaymentBreakdownLines = (row) => {
       Method: "GCASH",
       Amount: gcashAmount,
       Reference: fallbackReference,
-      TransferDate: normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate)
-    });
+        TransferDate: normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate),
+        ReceiverLast4: normalizeCommentValue(row?.ReceiverLast4 || row?.GCashReceiverLast4)
+      });
   }
 
   if (!lines.length && paymentMethod) {
@@ -212,11 +228,15 @@ const getPaymentBreakdownLines = (row) => {
       Method: paymentMethod,
       Amount: totalAmount,
       Reference: paymentMethod === "CASH" ? "" : fallbackReference,
-      TransferDate:
-        paymentMethod === "CASH"
-          ? ""
-          : normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate)
-    });
+        TransferDate:
+          paymentMethod === "CASH"
+            ? ""
+            : normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate),
+        ReceiverLast4:
+          paymentMethod === "CASH"
+            ? ""
+            : normalizeCommentValue(row?.ReceiverLast4 || row?.GCashReceiverLast4)
+      });
   }
 
   if (!lines.length && fallbackReference && totalAmount > 0) {
@@ -286,11 +306,16 @@ exports.getPendingTransactions = async (req, res) => {
           VerificationMethod: verificationLine?.Method || "",
           VerificationAmount: verificationLine?.Amount || 0,
           VerificationTransferDate:
-            verificationLine?.TransferDate ||
-            normalizeCommentValue(row.TransferDate) ||
-            normalizeCommentValue(row.GCashTransferDate) ||
-            "",
-          VerificationReference:
+              verificationLine?.TransferDate ||
+              normalizeCommentValue(row.TransferDate) ||
+              normalizeCommentValue(row.GCashTransferDate) ||
+              "",
+            VerificationReceiverLast4:
+              verificationLine?.ReceiverLast4 ||
+              normalizeCommentValue(row.ReceiverLast4) ||
+              normalizeCommentValue(row.GCashReceiverLast4) ||
+              "",
+            VerificationReference:
             verificationLine?.Reference ||
             normalizeReferenceValue(row.MOPRef) ||
             normalizeReferenceValue(row.ReferenceNumber) ||
