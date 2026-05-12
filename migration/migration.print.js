@@ -89,6 +89,8 @@ async function migrate() {
     await Print.collection.createIndex({ PaymentReceipt: 1 });
     await Print.collection.createIndex({ Invoice: 1 });
     await Print.collection.createIndex({ TransactionCode: 1 });
+    await Print.collection.createIndex({ TransactionDate: 1 });
+    await Print.collection.createIndex({ PaymentDate: 1 });
 
     console.log("✅ Migration complete");
     console.log("📦 Collection: print");

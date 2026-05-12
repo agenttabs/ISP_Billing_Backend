@@ -91,6 +91,23 @@ exports.getClients = async (req, res) => {
 };
 
 // ✅ ADD CLIENT
+exports.getClientById = async (req, res) => {
+  try {
+    const client = await mongoose.connection.db
+      .collection(collections.clients)
+      .findOne({ _id: new mongoose.Types.ObjectId(req.params.id) });
+
+    if (!client) {
+      return res.status(404).json({ error: "Client not found" });
+    }
+
+    res.json(client);
+  } catch (err) {
+    console.error("GET CLIENT BY ID ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.createClient = async (req, res) => {
   try {
     const location = req.body.ServerLocation || "CCR2116";

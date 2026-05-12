@@ -109,23 +109,93 @@ const getHistoryReferenceCandidates = (row) =>
   [
     String(row?.Invoice || "").trim(),
     String(row?.PaymentReceipt || "").trim(),
-    String(row?.TransactionCode || "").trim()
+    String(row?.TransactionCode || "").trim(),
+    String(row?.MOPRef || "").trim(),
+    String(row?.ReferenceNumber || "").trim(),
+    String(row?.VerifiedReference || "").trim()
   ]
     .filter(Boolean)
     .map(normalizeLookupValue);
 
-const buildEarningLookupMap = (rows = []) => {
-  const lookup = new Map();
+const buildPrintLookupMaps = (rows = []) => {
+  const byId = new Map();
+  const byReference = new Map();
 
   rows.forEach((row) => {
+    if (row?._id) {
+      byId.set(String(row._id), row);
+    }
+
     getHistoryReferenceCandidates(row).forEach((key) => {
-      if (key && !lookup.has(key)) {
-        lookup.set(key, row);
+      if (key && !byReference.has(key)) {
+        byReference.set(key, row);
       }
     });
   });
 
-  return lookup;
+  return { byId, byReference };
+};
+
+const enrichEarningRowWithPrint = (row, printLookupById, printLookupByReference) => {
+  const matchedPrint =
+    (row?.PrintId ? printLookupById.get(String(row.PrintId)) : null) ||
+    getHistoryReferenceCandidates(row)
+      .map((key) => printLookupByReference.get(key))
+      .find(Boolean);
+
+  if (!matchedPrint) {
+    return row;
+  }
+
+  return {
+    ...row,
+    PrintId: row?.PrintId || matchedPrint?._id || "",
+    TransactionDate: row?.TransactionDate || matchedPrint?.TransactionDate || matchedPrint?.PaymentDate || matchedPrint?.createdAt,
+    PaymentDate: row?.PaymentDate || matchedPrint?.PaymentDate || "",
+    PaymentReceipt: row?.PaymentReceipt || matchedPrint?.PaymentReceipt || "",
+    Invoice: row?.Invoice || matchedPrint?.Invoice || "",
+    TransactionCode: row?.TransactionCode || matchedPrint?.TransactionCode || "",
+    ClientName: row?.ClientName || matchedPrint?.ClientName || "",
+    AccountNumber: row?.AccountNumber || matchedPrint?.AccountNumber || "",
+    PaymentMethod: row?.PaymentMethod || matchedPrint?.PaymentMethod || row?.MOP || matchedPrint?.MOP || "",
+    MOP: row?.MOP || matchedPrint?.MOP || row?.PaymentMethod || matchedPrint?.PaymentMethod || "",
+    MOPRef: row?.MOPRef || matchedPrint?.MOPRef || "",
+    ReferenceNumber: row?.ReferenceNumber || matchedPrint?.ReferenceNumber || row?.MOPRef || matchedPrint?.MOPRef || "",
+    TransferDate:
+      row?.TransferDate ||
+      row?.GCashTransferDate ||
+      matchedPrint?.TransferDate ||
+      matchedPrint?.GCashTransferDate ||
+      "",
+    GCashTransferDate:
+      row?.GCashTransferDate ||
+      row?.TransferDate ||
+      matchedPrint?.GCashTransferDate ||
+      matchedPrint?.TransferDate ||
+      "",
+    ReceiverLast4:
+      row?.ReceiverLast4 ||
+      row?.GCashReceiverLast4 ||
+      matchedPrint?.ReceiverLast4 ||
+      matchedPrint?.GCashReceiverLast4 ||
+      "",
+    GCashReceiverLast4:
+      row?.GCashReceiverLast4 ||
+      row?.ReceiverLast4 ||
+      matchedPrint?.GCashReceiverLast4 ||
+      matchedPrint?.ReceiverLast4 ||
+      "",
+    Verified:
+      row?.Verified === true
+        ? true
+        : matchedPrint?.Verified === true,
+    VerifiedAt: row?.VerifiedAt || matchedPrint?.VerifiedAt || "",
+    VerifiedBy: row?.VerifiedBy || matchedPrint?.VerifiedBy || "",
+    VerifiedById: row?.VerifiedById || matchedPrint?.VerifiedById || "",
+    VerificationMethod: row?.VerificationMethod || matchedPrint?.VerificationMethod || "",
+    VerifiedReference: row?.VerifiedReference || matchedPrint?.VerifiedReference || "",
+    VerificationComment: row?.VerificationComment || matchedPrint?.VerificationComment || ""
+  };
 };
 
 const enrichPrintRowWithEarning = (row, earningLookup) => {
@@ -266,7 +336,7 @@ exports.getPendingTransactions = async (req, res) => {
       today.getDate()
     ).padStart(2, "0")}`;
     const filter = {
-      Type: "Payment",
+      Item: "ISP-Client Payment",
       Verified: { $ne: true }
     };
 
@@ -277,22 +347,76 @@ exports.getPendingTransactions = async (req, res) => {
     }
 
     const db = mongoose.connection.db;
-    const [rows, earningRows] = await Promise.all([
-      db.collection(collections.print)
-        .find(filter)
-        .sort({
-          PaymentDate: -1,
-          TransactionDate: -1,
-          createdAt: -1
-        })
-        .toArray(),
-      db.collection(collections.earnings).find({}).toArray()
-    ]);
+    const rows = await db
+      .collection(collections.earnings)
+      .find(filter)
+      .sort({
+        TransactionDate: -1,
+        createdAt: -1
+      })
+      .toArray();
 
-    const earningLookup = buildEarningLookupMap(earningRows);
+    const printIds = rows
+      .map((row) => row?.PrintId)
+      .filter((value) => ObjectId.isValid(String(value)))
+      .map((value) => new ObjectId(String(value)));
+
+    const referenceKeys = Array.from(new Set(rows.flatMap((row) => getHistoryReferenceCandidates(row))));
+
+    const printFilters = [];
+    if (printIds.length) {
+      printFilters.push({ _id: { $in: printIds } });
+    }
+    if (referenceKeys.length) {
+      printFilters.push(
+        { PaymentReceipt: { $in: referenceKeys } },
+        { Invoice: { $in: referenceKeys } },
+        { TransactionCode: { $in: referenceKeys } },
+        { MOPRef: { $in: referenceKeys } },
+        { ReferenceNumber: { $in: referenceKeys } },
+        { VerifiedReference: { $in: referenceKeys } }
+      );
+    }
+
+    const printRows = printFilters.length
+      ? await db
+          .collection(collections.print)
+          .find({ $or: printFilters })
+          .project({
+            _id: 1,
+            PaymentReceipt: 1,
+            Invoice: 1,
+            TransactionCode: 1,
+            MOPRef: 1,
+            ReferenceNumber: 1,
+            VerifiedReference: 1,
+            ClientName: 1,
+            AccountNumber: 1,
+            PaymentMethod: 1,
+            MOP: 1,
+            TransferDate: 1,
+            GCashTransferDate: 1,
+            ReceiverLast4: 1,
+            GCashReceiverLast4: 1,
+            Verified: 1,
+            VerifiedAt: 1,
+            VerifiedBy: 1,
+            VerifiedById: 1,
+            VerificationMethod: 1,
+            VerificationComment: 1,
+            TransactionDate: 1,
+            PaymentDate: 1,
+            createdAt: 1
+          })
+          .toArray()
+      : [];
+
+    const { byId: printLookupById, byReference: printLookupByReference } =
+      buildPrintLookupMaps(printRows);
 
     const pendingTransactions = rows
-      .map((row) => enrichPrintRowWithEarning(row, earningLookup))
+      .map((row) => enrichEarningRowWithPrint(row, printLookupById, printLookupByReference))
+      .filter((row) => row?.Verified !== true)
       .filter((row) => isDateOnRequestedDay(getVerificationDateCandidate(row), requestedDate))
       .filter(isNonCashPayment)
       .map((row) => {
@@ -360,6 +484,8 @@ exports.verifyTransactions = async (req, res) => {
       req.user?.name || req.user?.username || req.user?.Name || req.user?.id || "";
     const verifiedById = req.user?.id || req.user?._id || "";
     const verifiedAt = new Date();
+    const db = mongoose.connection.db;
+    const earningsCollection = db.collection(collections.earnings);
 
     const operations = validRecords.map((record) => ({
       updateOne: {
@@ -384,9 +510,7 @@ exports.verifyTransactions = async (req, res) => {
       }
     }));
 
-    const result = await mongoose.connection.db
-      .collection(collections.print)
-      .bulkWrite(operations, { ordered: false });
+    const result = await earningsCollection.bulkWrite(operations, { ordered: false });
 
     res.json({
       success: true,
@@ -398,7 +522,7 @@ exports.verifyTransactions = async (req, res) => {
       req,
       module: "TRANSACTION_VERIFICATION",
       action: "VERIFY",
-      targetType: "PRINT",
+      targetType: "EARNING",
       status: "SUCCESS",
       summary: "Transaction verification completed.",
       details: {

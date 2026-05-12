@@ -350,7 +350,7 @@ const getTopLevelPaymentFields = (row) => {
       uniqueMethods.length === 1
         ? uniqueMethods[0]
         : paymentBreakdown.length > 1
-          ? "MULTIPLE"
+          ? uniqueMethods.join("/")
           : normalizePaymentMethod(row?.PaymentMethod || row?.MOP) || "CASH",
     ReferenceNumber:
       uniqueNonCashReferences.length === 1
@@ -639,6 +639,23 @@ const buildEarningLookupMap = (rows = []) => {
   return lookup;
 };
 
+const buildEarningRowsByPrintId = (rows = []) => {
+  const lookup = new Map();
+
+  rows.forEach((row) => {
+    const key = String(row?.PrintId || "").trim();
+    if (!key) {
+      return;
+    }
+
+    const existing = lookup.get(key) || [];
+    existing.push(row);
+    lookup.set(key, existing);
+  });
+
+  return lookup;
+};
+
 const enrichPrintHistoryRowWithEarning = (row, earningLookup) => {
   const matchedEarning = getHistoryReferenceCandidates(row)
     .map((key) => earningLookup.get(key))
@@ -860,41 +877,24 @@ exports.getTransactions = async (req, res) => {
     const printCollection = db.collection(collections.print);
     const earningsCollection = db.collection(collections.earnings);
     const requestedAccountNumber = normalizeAccountNumber(req.query.accountNumber);
+    const requestedAccountName = String(req.query.accountName || "").trim();
+    const requestedClientId = String(req.query.clientId || "").trim();
     let printRows = [];
     let earningRows = [];
 
-    try {
-      printRows = await printCollection.find({}).toArray();
-    } catch (err) {
-      console.warn("PRINT COLLECTION QUERY WARNING:", err.message);
-      printRows = [];
+    const printQuery = {};
+
+    if (requestedAccountNumber) {
+      printQuery.AccountNumber = requestedAccountNumber;
+    } else if (requestedClientId) {
+      printQuery.ClientId = requestedClientId;
+    } else if (requestedAccountName) {
+      printQuery.AccountName = requestedAccountName;
     }
-
-    try {
-      earningRows = await earningsCollection.find({}).toArray();
-    } catch (err) {
-      console.warn("EARNINGS COLLECTION QUERY WARNING:", err.message);
-      earningRows = [];
-    }
-
-    const earningLookup = buildEarningLookupMap(earningRows);
-
-    const printHistoryRows = printRows.map((row) => ({
-      ...enrichPrintHistoryRowWithEarning(row, earningLookup),
-      HistorySource: "print"
-    }));
-
-    let filteredTransactions = mergeHistoryRows(printHistoryRows).filter((row) => {
-      const rowAccountNumber = normalizeAccountNumber(row.AccountNumber);
-      return !requestedAccountNumber || rowAccountNumber === requestedAccountNumber;
-    });
 
     if (String(req.user.type || req.user.role || "").toUpperCase() === "CASHIER" && !requestedAccountNumber) {
       const { start, end } = getTodayRange();
-      filteredTransactions = filteredTransactions.filter((row) => {
-        const transactionDate = getTransactionDateValue(row);
-        return transactionDate >= start && transactionDate <= end;
-      });
+      printQuery.TransactionDate = { $gte: start, $lte: end };
     } else if (req.query.startDate || req.query.endDate) {
       const start = req.query.startDate
         ? new Date(`${req.query.startDate}T00:00:00`)
@@ -903,13 +903,124 @@ exports.getTransactions = async (req, res) => {
         ? new Date(`${req.query.endDate}T23:59:59.999`)
         : null;
 
-      filteredTransactions = filteredTransactions.filter((row) => {
-        const transactionDate = getTransactionDateValue(row);
-        if (start && transactionDate < start) return false;
-        if (end && transactionDate > end) return false;
-        return true;
-      });
+      if (start || end) {
+        printQuery.TransactionDate = {};
+        if (start) {
+          printQuery.TransactionDate.$gte = start;
+        }
+        if (end) {
+          printQuery.TransactionDate.$lte = end;
+        }
+      }
     }
+
+    try {
+      printRows = await printCollection
+        .find(printQuery, {
+          projection: {
+            AccountName: 1,
+            AccountNumber: 1,
+            Balance: 1,
+            ClientId: 1,
+            ClientName: 1,
+            Cover: 1,
+            CreatedBy: 1,
+            DueDate: 1,
+            Invoice: 1,
+            MOP: 1,
+            MOPRef: 1,
+            NetPlan: 1,
+            PaymentDate: 1,
+            PaymentMethod: 1,
+            PaymentReceipt: 1,
+            ReferenceNumber: 1,
+            TotalAmount: 1,
+            TransactionCode: 1,
+            TransactionDate: 1,
+            Type: 1,
+            Verified: 1,
+            VerifiedAt: 1,
+            VerifiedBy: 1,
+            VerifiedById: 1,
+            createdAt: 1
+          }
+        })
+        .sort({ TransactionDate: -1, PaymentDate: -1, createdAt: -1 })
+        .toArray();
+    } catch (err) {
+      console.warn("PRINT COLLECTION QUERY WARNING:", err.message);
+      printRows = [];
+    }
+
+    const printIds = printRows
+      .map((row) => String(row?._id || "").trim())
+      .filter((value) => ObjectId.isValid(value));
+    const accountNames = [...new Set(printRows.map((row) => String(row.AccountName || "").trim()).filter(Boolean))];
+    const historyReferences = [...new Set(printRows.flatMap((row) => getHistoryReferenceCandidates(row)).filter(Boolean))];
+
+    if (printIds.length || accountNames.length || historyReferences.length) {
+      const earningClauses = [
+        ...(printIds.length
+          ? [{ PrintId: { $in: printIds } }]
+          : []),
+        ...(accountNames.length ? [{ AccountName: { $in: accountNames } }] : []),
+        ...(historyReferences.length
+          ? [
+              { Invoice: { $in: historyReferences } },
+              { MOPRef: { $in: historyReferences } },
+              { ReferenceNumber: { $in: historyReferences } },
+              { TransactionCode: { $in: historyReferences } }
+            ]
+          : [])
+      ];
+
+      const earningQuery = earningClauses.length === 1
+        ? earningClauses[0]
+        : { $or: earningClauses };
+
+      try {
+        earningRows = await earningsCollection
+          .find(earningQuery, {
+            projection: {
+              AccountName: 1,
+              Cash: 1,
+              Invoice: 1,
+              MOP: 1,
+              MOPRef: 1,
+              PaymentMethod: 1,
+              PrintId: 1,
+              ReceiptAmount: 1,
+              ReferenceNumber: 1,
+              ReceiverLast4: 1,
+              TransferDate: 1,
+              TransactionDate: 1,
+              TransactionCode: 1,
+              Verified: 1,
+              VerifiedAt: 1,
+              VerifiedBy: 1,
+              VerifiedById: 1
+            }
+          })
+          .toArray();
+      } catch (err) {
+        console.warn("EARNINGS COLLECTION QUERY WARNING:", err.message);
+        earningRows = [];
+      }
+    }
+
+    const earningLookup = buildEarningLookupMap(earningRows);
+    const earningRowsByPrintId = buildEarningRowsByPrintId(earningRows);
+
+    const printHistoryRows = printRows.map((row) => ({
+      ...enrichPrintHistoryRowWithEarning(row, earningLookup),
+      EarningRows: earningRowsByPrintId.get(String(row?._id || "").trim()) || [],
+      HistorySource: "print"
+    }));
+
+    let filteredTransactions = mergeHistoryRows(printHistoryRows).filter((row) => {
+      const rowAccountNumber = normalizeAccountNumber(row.AccountNumber);
+      return !requestedAccountNumber || rowAccountNumber === requestedAccountNumber;
+    });
 
     filteredTransactions.sort(
       (a, b) => getTransactionDateValue(b) - getTransactionDateValue(a)
@@ -939,12 +1050,13 @@ exports.getTransactions = async (req, res) => {
 exports.createTransaction = async (req, res) => {
   try {
     const normalizedPaymentFields = getTopLevelPaymentFields(req.body);
+    const { PaymentBreakdown, ...topLevelPaymentFields } = normalizedPaymentFields;
     const payload = {
       ...req.body,
-      ...normalizedPaymentFields,
+      ...topLevelPaymentFields,
       ClientId: req.body.ClientId || "",
       Type: req.body.Type || "Payment",
-      MOP: normalizedPaymentFields.PaymentMethod,
+      MOP: topLevelPaymentFields.PaymentMethod,
       Verified: typeof req.body.Verified === "boolean" ? req.body.Verified : false,
       TransactionDate: req.body.TransactionDate
         ? new Date(req.body.TransactionDate)
@@ -1004,6 +1116,17 @@ exports.createEarning = async (req, res) => {
       .collection(collections.earnings)
       .insertOne(payload);
 
+    if (payload.PrintId && ObjectId.isValid(String(payload.PrintId))) {
+      await mongoose.connection.db.collection(collections.print).updateOne(
+        { _id: new ObjectId(String(payload.PrintId)) },
+        {
+          $addToSet: { EarningIds: result.insertedId },
+          $inc: { LinkedEarningCount: 1 },
+          $set: { updatedAt: new Date() }
+        }
+      );
+    }
+
     res.status(201).json({
       _id: result.insertedId,
       ...payload
@@ -1027,20 +1150,29 @@ exports.createEarning = async (req, res) => {
 
 exports.rollbackPaymentSave = async (req, res) => {
   try {
-    const earningId = req.body?.earningId;
+    const earningIds = Array.isArray(req.body?.earningIds)
+      ? req.body.earningIds.filter(Boolean)
+      : req.body?.earningId
+        ? [req.body.earningId]
+        : [];
     const transactionId = req.body?.transactionId;
 
     const rollbackSummary = {
       earningDeleted: false,
+      earningDeletedCount: 0,
       transactionDeleted: false
     };
 
-    if (earningId) {
+    if (earningIds.length) {
+      const earningObjectIds = earningIds.map(
+        (earningId) => new mongoose.Types.ObjectId(String(earningId))
+      );
       const earningDeleteResult = await mongoose.connection.db
         .collection(collections.earnings)
-        .deleteOne({ _id: new mongoose.Types.ObjectId(String(earningId)) });
+        .deleteMany({ _id: { $in: earningObjectIds } });
 
       rollbackSummary.earningDeleted = earningDeleteResult.deletedCount > 0;
+      rollbackSummary.earningDeletedCount = earningDeleteResult.deletedCount || 0;
     }
 
     if (transactionId) {
@@ -1056,12 +1188,12 @@ exports.rollbackPaymentSave = async (req, res) => {
       module: "PAYMENT",
       action: "ROLLBACK",
       targetType: "PAYMENT_SAVE",
-      targetId: transactionId || earningId || "",
+      targetId: transactionId || earningIds[0] || "",
       accountName: req.body?.AccountName || "",
       status: "SUCCESS",
       summary: "Rolled back partially saved payment records.",
       values: {
-        earningId: earningId || "",
+        earningIds,
         transactionId: transactionId || "",
         ...rollbackSummary
       }
@@ -1345,10 +1477,79 @@ exports.getEarnings = async (req, res) => {
     const earningsCollection = db.collection(collections.earnings);
     const printCollection = db.collection(collections.print);
     const userType = String(req.user.type || req.user.role || "").toUpperCase();
-    const [earnings, printRows] = await Promise.all([
-      earningsCollection.find({}).toArray(),
-      printCollection.find({}).toArray()
-    ]);
+    let rangeStart = null;
+    let rangeEnd = null;
+
+    if (userType === "CASHIER") {
+      const range = getTodayRange();
+      rangeStart = range.start;
+      rangeEnd = range.end;
+    } else if (req.query.startDate || req.query.endDate) {
+      rangeStart = req.query.startDate
+        ? new Date(`${req.query.startDate}T00:00:00`)
+        : null;
+      rangeEnd = req.query.endDate
+        ? new Date(`${req.query.endDate}T23:59:59.999`)
+        : null;
+    }
+
+    const buildRangeClause = (fieldName) => {
+      const clause = {};
+      if (rangeStart) {
+        clause.$gte = rangeStart;
+      }
+      if (rangeEnd) {
+        clause.$lte = rangeEnd;
+      }
+      return Object.keys(clause).length ? { [fieldName]: clause } : null;
+    };
+
+    const earningsFilter = {};
+    const earningsRangeClauses = [
+      buildRangeClause("TransactionDate"),
+      buildRangeClause("createdAt")
+    ].filter(Boolean);
+
+    if (earningsRangeClauses.length === 1) {
+      Object.assign(earningsFilter, earningsRangeClauses[0]);
+    } else if (earningsRangeClauses.length > 1) {
+      earningsFilter.$or = earningsRangeClauses;
+    }
+
+    const earningsProjection = {
+      TransactionDate: 1,
+      createdAt: 1,
+      Invoice: 1,
+      Item: 1,
+      ClientName: 1,
+      AccountName: 1,
+      DeclaredBy: 1,
+      CreatedBy: 1,
+      CreatedById: 1,
+      Cash: 1,
+      TotalAmount: 1,
+      MOP: 1,
+      Type: 1,
+      MOPRef: 1,
+      ReferenceNumber: 1,
+      PaymentReceipt: 1,
+      TransactionCode: 1,
+      TransferDate: 1,
+      GCashTransferDate: 1,
+      ReceiverLast4: 1,
+      GCashReceiverLast4: 1,
+      Verified: 1,
+      VerifiedAt: 1,
+      VerifiedBy: 1,
+      VerifiedById: 1,
+      VerificationMethod: 1,
+      VerifiedReference: 1,
+      VerificationComment: 1
+    };
+
+    const earnings = await earningsCollection
+      .find(earningsFilter, { projection: earningsProjection })
+      .toArray();
 
     const verificationLookup = new Map();
 
@@ -1361,8 +1562,64 @@ exports.getEarnings = async (req, res) => {
         row?.ReferenceNumber,
         row?.VerifiedReference
       ]
-        .map((value) => normalizeReferenceValue(value))
+          .map((value) => normalizeReferenceValue(value))
+          .filter(Boolean);
+
+    const getVerificationQueryCandidates = (row = {}) =>
+      [
+        row?.Invoice,
+        row?.PaymentReceipt,
+        row?.TransactionCode,
+        row?.MOPRef,
+        row?.ReferenceNumber,
+        row?.VerifiedReference
+      ]
+        .flatMap((value) => {
+          const raw = String(value || "").trim();
+          const normalized = normalizeReferenceValue(value);
+          return [raw, normalized];
+        })
         .filter(Boolean);
+
+    const verificationKeys = Array.from(
+      new Set(
+        earnings.flatMap((row) => getVerificationQueryCandidates(row))
+      )
+    );
+
+    let printRows = [];
+
+    if (verificationKeys.length > 0) {
+      const printProjection = {
+        PaymentReceipt: 1,
+        Invoice: 1,
+        TransactionCode: 1,
+        MOPRef: 1,
+        ReferenceNumber: 1,
+        VerifiedReference: 1,
+        Verified: 1,
+        VerifiedAt: 1,
+        VerifiedBy: 1,
+        VerifiedById: 1,
+        VerificationMethod: 1,
+        VerificationComment: 1
+      };
+
+      const printReferenceFilter = {
+        $or: [
+          { PaymentReceipt: { $in: verificationKeys } },
+          { Invoice: { $in: verificationKeys } },
+          { TransactionCode: { $in: verificationKeys } },
+          { MOPRef: { $in: verificationKeys } },
+          { ReferenceNumber: { $in: verificationKeys } },
+          { VerifiedReference: { $in: verificationKeys } }
+        ]
+      };
+
+      printRows = await printCollection
+        .find(printReferenceFilter, { projection: printProjection })
+        .toArray();
+    }
 
     printRows.forEach((row) => {
       getVerificationCandidates(row).forEach((key) => {
@@ -1376,8 +1633,16 @@ exports.getEarnings = async (req, res) => {
       const matchedPrint = getVerificationCandidates(row)
         .map((key) => verificationLookup.get(key))
         .find(Boolean);
+      const earningHasVerification =
+        row?.Verified === true ||
+        Boolean(row?.VerifiedAt) ||
+        Boolean(row?.VerifiedBy) ||
+        Boolean(row?.VerifiedById) ||
+        Boolean(row?.VerificationMethod) ||
+        Boolean(row?.VerifiedReference) ||
+        Boolean(row?.VerificationComment);
 
-      if (!matchedPrint) {
+      if (earningHasVerification || !matchedPrint) {
         return {
           ...row,
           Verified: row?.Verified === true,
@@ -1403,28 +1668,6 @@ exports.getEarnings = async (req, res) => {
     };
 
     let filteredEarnings = earnings.map(enrichEarningVerification);
-
-    if (userType === "CASHIER") {
-      const { start, end } = getTodayRange();
-      filteredEarnings = filteredEarnings.filter((row) => {
-        const transactionDate = getEarningTransactionDateValue(row);
-        return transactionDate >= start && transactionDate <= end;
-      });
-    } else if (req.query.startDate || req.query.endDate) {
-      const start = req.query.startDate
-        ? new Date(`${req.query.startDate}T00:00:00`)
-        : null;
-      const end = req.query.endDate
-        ? new Date(`${req.query.endDate}T23:59:59.999`)
-        : null;
-
-      filteredEarnings = filteredEarnings.filter((row) => {
-        const transactionDate = getEarningTransactionDateValue(row);
-        if (start && transactionDate < start) return false;
-        if (end && transactionDate > end) return false;
-        return true;
-      });
-    }
 
     filteredEarnings.sort((a, b) => {
       const dateA = getEarningTransactionDateValue(a);

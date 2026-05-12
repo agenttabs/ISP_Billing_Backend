@@ -92,6 +92,14 @@ function transform(record) {
     GCashTransferDate: cleanString(record.GCashTransferDate || record.TransferDate),
     ReceiverLast4: cleanString(record.ReceiverLast4 || record.GCashReceiverLast4),
     GCashReceiverLast4: cleanString(record.GCashReceiverLast4 || record.ReceiverLast4),
+    Verified: record.Verified === true,
+    VerifiedAt: record.VerifiedAt ? parseDate(record.VerifiedAt) : null,
+    VerifiedBy: cleanString(record.VerifiedBy),
+    VerifiedById: cleanString(record.VerifiedById),
+    VerificationMethod: cleanString(record.VerificationMethod).toUpperCase(),
+    VerifiedReference: cleanString(record.VerifiedReference || record.ReferenceNumber || record.MOPRef),
+    VerificationComment: cleanString(record.VerificationComment),
+    PrintId: record.PrintId || null,
     DeclaredBy: record.DeclaredBy || "",
     TransactionDate: transactionDate,
     createdAt: transactionDate,
@@ -122,6 +130,7 @@ async function migrate() {
     await Earning.insertMany(formatted);
     await Earning.collection.createIndex({ Invoice: 1 });
     await Earning.collection.createIndex({ MOPRef: 1 });
+    await Earning.collection.createIndex({ TransactionDate: 1 });
 
     console.log("Migration complete");
     console.log(`Inserted: ${formatted.length}`);

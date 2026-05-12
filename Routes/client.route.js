@@ -20,6 +20,12 @@ router.get(
   authorize("ADMIN", "CASHIER", "TECHNICIAN"),
   controller.getClientMikrotikStatus
 );
+router.get(
+  "/clients/:id",
+  protect,
+  authorize("ADMIN", "CASHIER", "TECHNICIAN"),
+  controller.getClientById
+);
 router.post(
   "/clients",
   protect,
