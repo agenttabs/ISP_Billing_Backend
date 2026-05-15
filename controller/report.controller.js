@@ -371,11 +371,7 @@ const getTopLevelPaymentFields = (row) => {
     ReceiverLast4:
       nonCashReceiverLast4.length === 1
         ? nonCashReceiverLast4[0]
-        : normalizeCommentValue(row?.ReceiverLast4 || row?.GCashReceiverLast4),
-    GCashReceiverLast4:
-      nonCashReceiverLast4.length === 1
-        ? nonCashReceiverLast4[0]
-        : normalizeCommentValue(row?.GCashReceiverLast4 || row?.ReceiverLast4)
+        : normalizeCommentValue(row?.ReceiverLast4 || row?.GCashReceiverLast4)
   };
 };
 

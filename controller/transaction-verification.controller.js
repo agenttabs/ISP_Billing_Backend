@@ -117,13 +117,18 @@ const getHistoryReferenceCandidates = (row) =>
     .filter(Boolean)
     .map(normalizeLookupValue);
 
+const normalizeObjectIdValue = (value) => {
+  const rawValue = String(value || "").trim();
+  return ObjectId.isValid(rawValue) ? String(new ObjectId(rawValue)) : rawValue;
+};
+
 const buildPrintLookupMaps = (rows = []) => {
   const byId = new Map();
   const byReference = new Map();
 
   rows.forEach((row) => {
     if (row?._id) {
-      byId.set(String(row._id), row);
+      byId.set(normalizeObjectIdValue(row._id), row);
     }
 
     getHistoryReferenceCandidates(row).forEach((key) => {
@@ -137,11 +142,12 @@ const buildPrintLookupMaps = (rows = []) => {
 };
 
 const enrichEarningRowWithPrint = (row, printLookupById, printLookupByReference) => {
-  const matchedPrint =
-    (row?.PrintId ? printLookupById.get(String(row.PrintId)) : null) ||
-    getHistoryReferenceCandidates(row)
-      .map((key) => printLookupByReference.get(key))
-      .find(Boolean);
+  const printId = normalizeObjectIdValue(row?.PrintId);
+  const matchedPrint = printId
+    ? printLookupById.get(printId)
+    : getHistoryReferenceCandidates(row)
+        .map((key) => printLookupByReference.get(key))
+        .find(Boolean);
 
   if (!matchedPrint) {
     return row;
@@ -150,7 +156,14 @@ const enrichEarningRowWithPrint = (row, printLookupById, printLookupByReference)
   return {
     ...row,
     PrintId: row?.PrintId || matchedPrint?._id || "",
-    TransactionDate: row?.TransactionDate || matchedPrint?.TransactionDate || matchedPrint?.PaymentDate || matchedPrint?.createdAt,
+    PrintTransactionDate: matchedPrint?.TransactionDate || "",
+    TransactionDate:
+      matchedPrint?.TransactionDate ||
+      row?.TransactionDate ||
+      matchedPrint?.PaymentDate ||
+      row?.PaymentDate ||
+      matchedPrint?.createdAt ||
+      row?.createdAt,
     PaymentDate: row?.PaymentDate || matchedPrint?.PaymentDate || "",
     PaymentReceipt: row?.PaymentReceipt || matchedPrint?.PaymentReceipt || "",
     Invoice: row?.Invoice || matchedPrint?.Invoice || "",
@@ -178,12 +191,6 @@ const enrichEarningRowWithPrint = (row, printLookupById, printLookupByReference)
       row?.GCashReceiverLast4 ||
       matchedPrint?.ReceiverLast4 ||
       matchedPrint?.GCashReceiverLast4 ||
-      "",
-    GCashReceiverLast4:
-      row?.GCashReceiverLast4 ||
-      row?.ReceiverLast4 ||
-      matchedPrint?.GCashReceiverLast4 ||
-      matchedPrint?.ReceiverLast4 ||
       "",
     Verified:
       row?.Verified === true
@@ -231,12 +238,6 @@ const enrichPrintRowWithEarning = (row, earningLookup) => {
       matchedEarning?.GCashReceiverLast4 ||
       row?.ReceiverLast4 ||
       row?.GCashReceiverLast4 ||
-      "",
-    GCashReceiverLast4:
-      matchedEarning?.GCashReceiverLast4 ||
-      matchedEarning?.ReceiverLast4 ||
-      row?.GCashReceiverLast4 ||
-      row?.ReceiverLast4 ||
       "",
     PaymentMethod: row?.PaymentMethod || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
     MOP: row?.MOP || matchedEarning?.MOP || matchedEarning?.PaymentMethod || "",
