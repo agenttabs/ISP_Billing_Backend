@@ -27,25 +27,6 @@ const getTodayRange = () => {
   return { start, end };
 };
 
-const getDateRangeFilter = (fieldName, startDate, endDate) => {
-  const filter = {};
-  const dateFilter = {};
-
-  if (startDate) {
-    dateFilter.$gte = new Date(`${startDate}T00:00:00`);
-  }
-
-  if (endDate) {
-    dateFilter.$lte = new Date(`${endDate}T23:59:59.999`);
-  }
-
-  if (Object.keys(dateFilter).length > 0) {
-    filter[fieldName] = dateFilter;
-  }
-
-  return filter;
-};
-
 const getTransactionDateValue = (row) =>
   new Date(row.TransactionDate || row.PaymentDate || row.createdAt || Date.now());
 
@@ -54,6 +35,32 @@ const getEarningTransactionDateValue = (row) =>
 
 const getExpenseTransactionDateValue = (row) =>
   new Date(row.LogDate || row.createdAt || row.updatedAt || Date.now());
+
+const normalizeActorToken = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+const buildTodayDateOrFilter = (...fieldNames) => {
+  const { start, end } = getTodayRange();
+  const clauses = fieldNames.map((fieldName) => ({
+    [fieldName]: { $gte: start, $lte: end }
+  }));
+
+  return clauses.length === 1 ? clauses[0] : { $or: clauses };
+};
+
+const getEmptyDashboardPaymentTotals = () => ({
+  gcashPayment: 0,
+  paymayaPayment: 0,
+  bankPayment: 0,
+  cashPayment: 0,
+  gcashPaidClients: 0,
+  paymayaPaidClients: 0,
+  bankPaidClients: 0,
+  cashPaidClients: 0
+});
 
 const getClientInstallDateValue = (client) => {
   const candidates = [
@@ -258,6 +265,83 @@ const getPastDueUnpaidRows = (clients = []) => {
     .sort((a, b) => b.daysPastDue - a.daysPastDue || a.accountName.localeCompare(b.accountName));
 };
 
+const getDashboardClientProjection = () => ({
+  AccountName: 1,
+  ClientName: 1,
+  AuthenticationMode: 1,
+  NetPlan: 1,
+  Profile: 1,
+  Plan: 1,
+  Status: 1,
+  status: 1,
+  PaymentStatus: 1,
+  AmountDue: 1,
+  amountDue: 1,
+  DueDate: 1,
+  ContactNumber: 1,
+  Mobile: 1,
+  Phone: 1,
+  Address: 1
+});
+
+const summarizeDashboardClients = (clients = []) => {
+  const todayStart = getManilaTodayStart();
+  const graceDays =
+    Number.isFinite(DISCONNECT_AFTER_DAYS) && DISCONNECT_AFTER_DAYS >= 0
+      ? DISCONNECT_AFTER_DAYS
+      : 15;
+  const summary = {
+    activeClients: 0,
+    pppoeClients: 0,
+    ipoeClients: 0,
+    totalClients: clients.length,
+    forDisconnectionToday: 0,
+    dueToday: 0,
+    pastDueUnpaid: 0
+  };
+
+  clients.forEach((client) => {
+    const authMode = String(client?.AuthenticationMode || "").trim().toUpperCase();
+    const disconnected = isDisconnectedClient(client);
+
+    if (!disconnected) {
+      summary.activeClients += 1;
+
+      if (authMode === "PPPOE") {
+        summary.pppoeClients += 1;
+      } else if (authMode === "IPOE") {
+        summary.ipoeClients += 1;
+      }
+    }
+
+    if (authMode !== "PPPOE" && authMode !== "IPOE") {
+      return;
+    }
+
+    if (isClientPlanDisconnected(client) || !isUnpaidClient(client)) {
+      return;
+    }
+
+    const dueDate = parseDateOnly(client?.DueDate);
+    if (!dueDate) {
+      return;
+    }
+
+    if (dueDate.getTime() === todayStart.getTime()) {
+      summary.dueToday += 1;
+    } else if (dueDate.getTime() < todayStart.getTime()) {
+      summary.pastDueUnpaid += 1;
+    }
+
+    const disconnectDate = addDaysUtc(dueDate, graceDays);
+    if (disconnectDate.getTime() === todayStart.getTime()) {
+      summary.forDisconnectionToday += 1;
+    }
+  });
+
+  return summary;
+};
+
 const normalizeAccountNumber = (value) =>
   String(value || "").replace(/\s+/g, "").trim();
 
@@ -379,6 +463,14 @@ const getDashboardActorFilter = (req) => {
   const actorId = String(req.user?.id || req.user?._id || "").trim();
   const actorName = String(req.user?.name || "").trim().toLowerCase();
   const actorUsername = String(req.user?.username || "").trim().toLowerCase();
+  const actorTokens = [
+    actorId,
+    actorName,
+    actorUsername,
+    normalizeActorToken(actorId),
+    normalizeActorToken(actorName),
+    normalizeActorToken(actorUsername)
+  ].filter(Boolean);
   const actorType = String(req.user?.type || req.user?.role || "").trim().toUpperCase();
 
   return (row) => {
@@ -419,26 +511,87 @@ const getDashboardActorFilter = (req) => {
       .map((value) => String(value || "").trim().toLowerCase())
       .filter(Boolean);
 
-    return rowOwnerIds.includes(actorId) || rowOwners.includes(actorName) || rowOwners.includes(actorUsername);
+    const rowOwnerTokens = [
+      ...rowOwnerIds,
+      ...rowOwners,
+      ...rowOwnerIds.map((value) => normalizeActorToken(value)),
+      ...rowOwners.map((value) => normalizeActorToken(value))
+    ].filter(Boolean);
+
+    return rowOwnerTokens.some((value) => actorTokens.includes(value));
   };
 };
 
 const getDashboardTodayEarnings = (earningsRows = [], req) => {
+  const actorType = String(req.user?.type || req.user?.role || "").trim().toUpperCase();
+
+  if (actorType === "CASHIER") {
+    return earningsRows.filter((row) => {
+      const transactionDate = getEarningTransactionDateValue(row);
+      const { start, end } = getTodayRange();
+      return transactionDate >= start && transactionDate <= end;
+    });
+  }
+
   const actorFilter = getDashboardActorFilter(req);
   return earningsRows.filter(actorFilter);
 };
 
+const getDashboardReceiptKeys = (row = {}) =>
+  [
+    row._id,
+    row.PrintId,
+    row.Invoice,
+    row.PaymentReceipt,
+    row.TransactionCode,
+    row.MOPRef,
+    row.ReferenceNumber
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+const buildDashboardReceiptLookup = (printRows = []) => {
+  const lookup = new Map();
+
+  printRows.forEach((row) => {
+    getDashboardReceiptKeys(row).forEach((key) => {
+      if (!lookup.has(key)) {
+        lookup.set(key, row);
+      }
+    });
+  });
+
+  return lookup;
+};
+
+const enrichDashboardEarningsWithReceiptOwner = (earningsRows = [], printRows = []) => {
+  const receiptLookup = buildDashboardReceiptLookup(printRows);
+
+  return earningsRows.map((row) => {
+    const matchedReceipt = getDashboardReceiptKeys(row)
+      .map((key) => receiptLookup.get(key))
+      .find(Boolean);
+
+    if (!matchedReceipt) {
+      return row;
+    }
+
+    return {
+      ...row,
+      AccountNumber: row.AccountNumber || matchedReceipt.AccountNumber,
+      ClientName: row.ClientName || matchedReceipt.ClientName,
+      DeclaredBy: row.DeclaredBy || matchedReceipt.CreatedBy,
+      DeclaredById: row.DeclaredById || matchedReceipt.CreatedById,
+      CreatedBy: row.CreatedBy || matchedReceipt.CreatedBy,
+      CreatedById: row.CreatedById || matchedReceipt.CreatedById,
+      Cashier: row.Cashier || matchedReceipt.CreatedBy,
+      CashierId: row.CashierId || matchedReceipt.CreatedById
+    };
+  });
+};
+
 const accumulateDashboardPaymentTotals = (rows = []) => {
-  const paymentTotals = {
-    gcashPayment: 0,
-    paymayaPayment: 0,
-    bankPayment: 0,
-    cashPayment: 0,
-    gcashPaidClients: 0,
-    paymayaPaidClients: 0,
-    bankPaidClients: 0,
-    cashPaidClients: 0
-  };
+  const paymentTotals = getEmptyDashboardPaymentTotals();
   const paidClientSets = {
     GCASH: new Set(),
     PAYMAYA: new Set(),
@@ -479,6 +632,58 @@ const accumulateDashboardPaymentTotals = (rows = []) => {
   paymentTotals.cashPaidClients = paidClientSets.CASH.size;
 
   return paymentTotals;
+};
+
+const getDashboardPaymentTotalsFromEarnings = async (db) => {
+  const rows = await db
+    .collection(collections.earnings)
+    .aggregate([
+      { $match: buildTodayDateOrFilter("TransactionDate", "createdAt") },
+      {
+        $project: {
+          method: { $toUpper: { $ifNull: ["$MOP", "$PaymentMethod"] } },
+          amount: { $toDouble: { $ifNull: ["$Cash", { $ifNull: ["$TotalAmount", 0] }] } },
+          accountKey: {
+            $ifNull: [
+              "$AccountNumber",
+              { $ifNull: ["$AccountName", { $ifNull: ["$ClientName", { $toString: "$_id" }] }] }
+            ]
+          }
+        }
+      },
+      { $match: { method: { $in: ["GCASH", "PAYMAYA", "BANK", "CASH"] }, amount: { $gt: 0 } } },
+      {
+        $group: {
+          _id: "$method",
+          total: { $sum: "$amount" },
+          clients: { $addToSet: "$accountKey" }
+        }
+      }
+    ])
+    .toArray();
+  const totals = getEmptyDashboardPaymentTotals();
+
+  rows.forEach((row) => {
+    const method = String(row?._id || "").trim().toUpperCase();
+    const amount = Number(row?.total || 0);
+    const count = Array.isArray(row?.clients) ? row.clients.length : 0;
+
+    if (method === "GCASH") {
+      totals.gcashPayment = amount;
+      totals.gcashPaidClients = count;
+    } else if (method === "PAYMAYA") {
+      totals.paymayaPayment = amount;
+      totals.paymayaPaidClients = count;
+    } else if (method === "BANK") {
+      totals.bankPayment = amount;
+      totals.bankPaidClients = count;
+    } else if (method === "CASH") {
+      totals.cashPayment = amount;
+      totals.cashPaidClients = count;
+    }
+  });
+
+  return totals;
 };
 
 const buildDashboardCollectionRows = (rows = [], method) => {
@@ -687,27 +892,19 @@ const enrichPrintHistoryRowWithEarning = (row, earningLookup) => {
 exports.getDashboardSummary = async (req, res) => {
   try {
     const db = mongoose.connection.db;
-    const clients = await db.collection(collections.clients).find({}).toArray();
-    const earningsRows = await db.collection(collections.earnings).find({}).toArray();
-
-    const activeClients = clients.filter((client) => !isDisconnectedClient(client));
-    const pppoeCount = activeClients.filter(
-      (client) => String(client.AuthenticationMode || "").toUpperCase() === "PPPOE"
-    ).length;
-    const ipoeCount = activeClients.filter(
-      (client) => String(client.AuthenticationMode || "").toUpperCase() === "IPOE"
-    ).length;
-    const dashboardRows = getDashboardTodayEarnings(earningsRows, req);
-    const paymentTotals = accumulateDashboardPaymentTotals(dashboardRows);
+    const userType = String(req.user?.type || req.user?.role || "").trim().toUpperCase();
+    const clients = await db
+      .collection(collections.clients)
+      .find({}, { projection: getDashboardClientProjection() })
+      .toArray();
+    const clientSummary = summarizeDashboardClients(clients);
+    const paymentTotals =
+      userType === "ADMIN"
+        ? await getDashboardPaymentTotalsFromEarnings(db)
+        : getEmptyDashboardPaymentTotals();
 
     res.json({
-      activeClients: activeClients.length,
-      pppoeClients: pppoeCount,
-      ipoeClients: ipoeCount,
-      totalClients: clients.length,
-      forDisconnectionToday: getDisconnectionTodayRows(clients).length,
-      dueToday: getDueTodayRows(clients).length,
-      pastDueUnpaid: getPastDueUnpaidRows(clients).length,
+      ...clientSummary,
       ...paymentTotals
     });
   } catch (err) {
@@ -722,12 +919,17 @@ exports.getDashboardCollectionList = async (req, res) => {
       return res.status(400).json({ error: "Invalid collection method." });
     }
 
-    const earningsRows = await mongoose.connection.db
-      .collection(collections.earnings)
-      .find({})
-      .toArray();
+    const db = mongoose.connection.db;
+    const todayPaymentFilter = buildTodayDateOrFilter("TransactionDate", "createdAt", "PaymentDate");
+    const [earningsRows, printRows] = await Promise.all([
+      db.collection(collections.earnings).find(todayPaymentFilter).toArray(),
+      db.collection(collections.print).find(todayPaymentFilter).toArray()
+    ]);
 
-    const dashboardRows = getDashboardTodayEarnings(earningsRows, req);
+    const dashboardRows = getDashboardTodayEarnings(
+      enrichDashboardEarningsWithReceiptOwner(earningsRows, printRows),
+      req
+    );
     const rows = buildDashboardCollectionRows(dashboardRows, method);
 
     res.json({

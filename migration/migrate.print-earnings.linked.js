@@ -321,11 +321,18 @@ async function migrate() {
     await Print.collection.createIndex({ TransactionDate: 1 });
     await Print.collection.createIndex({ PaymentDate: 1 });
     await Print.collection.createIndex({ EarningIds: 1 });
+    await Print.collection.createIndex({ TransactionDate: 1, PaymentMethod: 1 });
+    await Print.collection.createIndex({ createdAt: 1, PaymentMethod: 1 });
+    await Print.collection.createIndex({ PaymentDate: 1, PaymentMethod: 1 });
 
     await Earning.collection.createIndex({ Invoice: 1 });
     await Earning.collection.createIndex({ MOPRef: 1 });
     await Earning.collection.createIndex({ TransactionDate: 1 });
     await Earning.collection.createIndex({ PrintId: 1 });
+    await Earning.collection.createIndex({ TransactionDate: 1, MOP: 1 });
+    await Earning.collection.createIndex({ createdAt: 1, MOP: 1 });
+    await Earning.collection.createIndex({ PaymentDate: 1, MOP: 1 });
+    await Earning.collection.createIndex({ AccountNumber: 1, TransactionDate: -1 });
 
     const linkedCount = insertedEarnings.filter((row) => row.PrintId).length;
 

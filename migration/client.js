@@ -100,6 +100,8 @@ async function migrate() {
     await Client.collection.createIndex({ NetPlan: 1 });
     await Client.collection.createIndex({ MacAddress: 1 });
     await Client.collection.createIndex({ AuthenticationMode: 1, DueDate: 1, Status: 1 });
+    await Client.collection.createIndex({ AuthenticationMode: 1, PaymentStatus: 1, DueDate: 1 });
+    await Client.collection.createIndex({ DueDate: 1, PaymentStatus: 1 });
 
     console.log("✅ Migration complete (all fields cleaned)");
   } catch (err) {
