@@ -12,6 +12,13 @@ router.get(
   controller.getClientBypassList
 );
 
+router.get(
+  "/client-bypass/clients",
+  protect,
+  authorize("ADMIN", "CASHIER", "TECHNICIAN"),
+  controller.getClientBypassClients
+);
+
 router.post(
   "/client-bypass",
   protect,

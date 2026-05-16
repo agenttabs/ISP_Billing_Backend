@@ -1,11 +1,50 @@
 const mongoose = require("mongoose");
 const { RouterOSClient } = require("routeros-client");
+const { Channel, RosException } = require("node-routeros");
 const collections = require("../config/collections");
 const normalizeServerType = (value) => String(value || "").trim().toUpperCase();
 const getRouterOsPort = (value) => {
     const parsed = parseInt(value, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 8728;
 };
+
+if (!Channel.prototype.__ispBillingEmptyReplyPatch) {
+    Channel.prototype.processPacket = function processPacket(packet) {
+        const reply = packet.shift();
+        const parsed = this.parsePacket(packet);
+
+        if (reply === "!empty") {
+            return;
+        }
+
+        if (reply === "!trap") {
+            this.trapped = true;
+            this.emit("trap", parsed);
+            return;
+        }
+
+        if (packet.length > 0 && !this.streaming) {
+            this.emit("data", parsed);
+        }
+
+        switch (reply) {
+            case "!re":
+                if (this.streaming) {
+                    this.emit("stream", parsed);
+                }
+                break;
+            case "!done":
+                if (!this.trapped) {
+                    this.emit("done", this.data);
+                }
+                this.close();
+                break;
+            default:
+                throw new RosException("UNKNOWNREPLY", { reply });
+        }
+    };
+    Channel.prototype.__ispBillingEmptyReplyPatch = true;
+}
 
 // 🔥 GET SERVER FROM DB
 const getMikrotikConfigAC = async () => {
@@ -830,7 +869,12 @@ const setPPPoESecretDisconnected = async ({
         const target = users.find((user) => user.name === username);
 
         if (!target?.id) {
-            throw new Error(`PPPoE secret not found for ${username}`);
+            return {
+                username,
+                profile: String(profile || "").trim(),
+                comment: String(disconnectRemark || "").trim(),
+                secretFound: false
+            };
         }
 
         await conn.menu("/ppp/secret").update(
@@ -866,7 +910,8 @@ const setPPPoESecretDisconnected = async ({
         return {
             username,
             profile: matchedProfile.name,
-            comment: String(disconnectRemark || "").trim()
+            comment: String(disconnectRemark || "").trim(),
+            secretFound: true
         };
     } finally {
         client.close();

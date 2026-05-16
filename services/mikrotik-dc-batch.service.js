@@ -10,7 +10,6 @@ const MANILA_TIMEZONE = "Asia/Manila";
 const PPP_DISCONNECTED_PROFILE = "dc-putol";
 const DEFAULT_DISCONNECTED_PLAN = "disconnection";
 const DEFAULT_GRACE_DAYS = Number(process.env.DISCONNECT_AFTER_DAYS || 15);
-const OVERDUE_ACCUMULATE_THRESHOLD = 15;
 
 const normalizeText = (value) =>
   String(value || "")
@@ -209,6 +208,12 @@ const isUnpaidClient = (client) => {
   return Number.isFinite(amountDue) && amountDue > 0;
 };
 
+const isPPPoESecretNotFoundError = (err) =>
+  String(err?.message || "")
+    .trim()
+    .toUpperCase()
+    .startsWith("PPPOE SECRET NOT FOUND");
+
 const formatDisconnectRemark = (date = new Date()) => {
   const parts = getManilaDateParts(date);
   const dateKey = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
@@ -315,6 +320,7 @@ const generateMikrotikDcBatchReport = async ({
   let updatedCount = 0;
   let alreadyDisconnectedCount = 0;
   let bypassSkippedCount = 0;
+  let pppoeSecretNotFoundSystemOnlyCount = 0;
 
   for (const client of clients) {
     const authMode = normalizeText(client?.AuthenticationMode);
@@ -346,10 +352,7 @@ const generateMikrotikDcBatchReport = async ({
     }
 
     const disconnectDate = addDaysUtc(dueDate, graceDays);
-    const isEligible =
-      graceDays < OVERDUE_ACCUMULATE_THRESHOLD
-        ? disconnectDate.getTime() === todayStart.getTime()
-        : disconnectDate.getTime() <= todayStart.getTime();
+    const isEligible = disconnectDate.getTime() <= todayStart.getTime();
 
     if (!isEligible) {
       continue;
@@ -400,13 +403,37 @@ const generateMikrotikDcBatchReport = async ({
     if (applyChanges && client?._id) {
       if (authMode === "PPPOE") {
         const disconnectRemark = formatDisconnectRemark(new Date());
-        await setPPPoESecretDisconnected({
-          username: client?.AccountName,
-          password: client?.Password || "",
-          profile: PPP_DISCONNECTED_PROFILE,
-          disconnectRemark
-        });
-        detail = `${detail} PPPoE secret changed to ${PPP_DISCONNECTED_PROFILE} with remark "${disconnectRemark}".`;
+        let pppoeSecretMissing = false;
+
+        try {
+          const mikrotikResult = await setPPPoESecretDisconnected({
+            username: client?.AccountName,
+            password: client?.Password || "",
+            profile: PPP_DISCONNECTED_PROFILE,
+            disconnectRemark
+          });
+
+          if (mikrotikResult?.secretFound === false) {
+            pppoeSecretMissing = true;
+            pppoeSecretNotFoundSystemOnlyCount += 1;
+            detail = `${detail} PPPoE secret not found in MikroTik; system plan changed only.`;
+          }
+        } catch (err) {
+          if (isPPPoESecretNotFoundError(err)) {
+            pppoeSecretMissing = true;
+            pppoeSecretNotFoundSystemOnlyCount += 1;
+            detail = `${detail} PPPoE secret not found in MikroTik; system plan changed only.`;
+          } else {
+            throw err;
+          }
+
+        }
+
+        if (pppoeSecretMissing) {
+          rows[rows.length - 1].result = "UPDATED_SYSTEM_ONLY";
+        } else {
+          detail = `${detail} PPPoE secret changed to ${PPP_DISCONNECTED_PROFILE} with remark "${disconnectRemark}".`;
+        }
       } else if (authMode === "IPOE") {
         await setIpoeLeaseStatic({
           macAddress: client?.MacAddress || client?.macAddress || "",
@@ -445,11 +472,12 @@ const generateMikrotikDcBatchReport = async ({
     updatedCount,
     alreadyDisconnectedCount,
     bypassSkippedCount,
+    pppoeSecretNotFoundSystemOnlyCount,
     totalRows: rows.length
   };
 
   if (applyChanges) {
-    const runSummary = `Checked ${checkedCount} client(s). Eligible after ${graceDays} day(s): ${disconnectedFoundCount}. Updated in system: ${updatedCount}. Skipped bypass: ${bypassSkippedCount}.`;
+    const runSummary = `Checked ${checkedCount} client(s). Eligible after ${graceDays} day(s): ${disconnectedFoundCount}. Updated in system: ${updatedCount}. Skipped bypass: ${bypassSkippedCount}. System-only updates for missing PPPoE secret: ${pppoeSecretNotFoundSystemOnlyCount}.`;
     await updateRunSummary({
       LastRunKey: getManilaDateKey(generatedAt),
       LastRunAt: generatedAt,

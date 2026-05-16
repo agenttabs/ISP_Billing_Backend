@@ -21,31 +21,43 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf-8"));
 }
 
-function toDate(value) {
+function toPHSafeDate(value) {
   if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+
+  const str = String(value).trim();
+
+  // format: 2026/5/15
+  if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(str)) {
+    const [year, month, day] = str.split("/").map(Number);
+    return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  }
+
+  // format: 6/30/2026
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(str)) {
+    const [month, day, year] = str.split("/").map(Number);
+    return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  }
+
+  // format: May 30, 2026
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    return new Date(
+      Date.UTC(
+        parsed.getFullYear(),
+        parsed.getMonth(),
+        parsed.getDate(),
+        12,
+        0,
+        0
+      )
+    );
+  }
+
+  return null;
 }
 
 function parseDate(value) {
-  if (!value) return new Date();
-
-  const direct = new Date(value);
-  if (!Number.isNaN(direct.getTime())) {
-    return direct;
-  }
-
-  const parts = String(value).split("/");
-  if (parts.length === 3) {
-    const [year, month, day] = parts;
-    const normalized = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    const retry = new Date(normalized);
-    if (!Number.isNaN(retry.getTime())) {
-      return retry;
-    }
-  }
-
-  return new Date();
+  return toPHSafeDate(value) || new Date();
 }
 
 function cleanString(value) {
@@ -71,10 +83,14 @@ function normalizePaymentBreakdown(lines = [], record = {}) {
   return lines
     .map((line) => ({
       ...line,
-      Method: cleanString(line?.Method || line?.PaymentMethod || record.MOP).toUpperCase(),
+      Method: cleanString(
+        line?.Method || line?.PaymentMethod || record.MOP
+      ).toUpperCase(),
       Amount: toNumber(line?.Amount),
       Reference: cleanString(line?.Reference || line?.MOPRef || record.MOPRef),
-      ReceiptAmount: toNumber(line?.ReceiptAmount || line?.Amount || record.Cash || record.TotalAmount),
+      ReceiptAmount: toNumber(
+        line?.ReceiptAmount || line?.Amount || record.Cash || record.TotalAmount
+      ),
       TransferDate: cleanString(
         line?.TransferDate ||
           line?.DateOfTransfer ||
@@ -87,7 +103,7 @@ function normalizePaymentBreakdown(lines = [], record = {}) {
           line?.GCashReceiverLast4 ||
           record.ReceiverLast4 ||
           record.GCashReceiverLast4
-      )
+      ),
     }))
     .filter((line) => line.Method && line.Amount > 0);
 }
@@ -99,7 +115,7 @@ function getReferenceCandidates(record = {}) {
     record.TransactionCode,
     record.MOPRef,
     record.ReferenceNumber,
-    record.VerifiedReference
+    record.VerifiedReference,
   ]
     .map((value) => normalizeReferenceValue(value))
     .filter(Boolean);
@@ -107,13 +123,21 @@ function getReferenceCandidates(record = {}) {
 
 function buildLookupKeys(record = {}) {
   const accountName = cleanString(record.AccountName).toUpperCase();
-  const amount = toNumber(record.Cash || record.TotalAmount || record.ReceiptAmount || record.Amount);
+
+  const amount = toNumber(
+    record.Cash ||
+      record.TotalAmount ||
+      record.ReceiptAmount ||
+      record.Amount
+  );
+
   const dateValue =
     record.TransactionDate ||
     record.PaymentDate ||
     record.createdAt ||
     record.updatedAt ||
     null;
+
   const date = dateValue ? parseDate(dateValue) : null;
   const dayKey = date ? date.toISOString().slice(0, 10) : "";
 
@@ -121,72 +145,96 @@ function buildLookupKeys(record = {}) {
     ...getReferenceCandidates(record),
     accountName && dayKey ? `${accountName}|${dayKey}` : "",
     accountName && amount ? `${accountName}|${amount}` : "",
-    accountName && dayKey && amount ? `${accountName}|${dayKey}|${amount}` : ""
+    accountName && dayKey && amount ? `${accountName}|${dayKey}|${amount}` : "",
   ]);
 }
 
 function convertPrint(record) {
-  const paymentDate = toDate(record.PaymentDate);
-  const transactionDate = toDate(record.TransactionDate) || paymentDate || new Date();
+  const paymentDate = toPHSafeDate(record.PaymentDate);
+  const transactionDate =
+    toPHSafeDate(record.TransactionDate) || paymentDate || new Date();
 
   return {
     ...record,
+
     PaymentDate: paymentDate,
     TransactionDate: transactionDate,
-    DcDate: toDate(record.DcDate),
-    DueDate: toDate(record.DueDate),
+    DcDate: toPHSafeDate(record.DcDate),
+    DueDate: toPHSafeDate(record.DueDate),
+
     PaymentBreakdown: normalizePaymentBreakdown(record.PaymentBreakdown, record),
+
     TransferDate: cleanString(record.TransferDate || record.GCashTransferDate),
     GCashTransferDate: cleanString(record.GCashTransferDate || record.TransferDate),
     ReceiverLast4: cleanString(record.ReceiverLast4 || record.GCashReceiverLast4),
-    GCashReceiverLast4: cleanString(record.GCashReceiverLast4 || record.ReceiverLast4),
+    GCashReceiverLast4: cleanString(
+      record.GCashReceiverLast4 || record.ReceiverLast4
+    ),
+
+    AmountDue: toNumber(record.AmountDue),
+    Balance: toNumber(record.Balance),
     CashAmount: toNumber(record.CashAmount),
     GCashAmount: toNumber(record.GCashAmount),
+    PromoPrice: toNumber(record.PromoPrice),
+    TSales: toNumber(record.TSales),
     TotalAmount: toNumber(record.TotalAmount),
-    Balance: toNumber(record.Balance),
+    VSales: toNumber(record.VSales),
+
     EarningIds: [],
-    LinkedEarningCount: 0
+    LinkedEarningCount: 0,
+
+    createdAt: transactionDate,
+    updatedAt: transactionDate,
   };
 }
 
 function generateInvoice(date) {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return `PR-${yyyy}${mm}${dd}-${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const yyyy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+
+  return `PR-${yyyy}${mm}${dd}-${Date.now()}${Math.floor(
+    Math.random() * 1000
+  )}`;
 }
 
 function convertEarning(record, matchedPrintId = null) {
   const transactionDate = parseDate(record.TransactionDate);
 
-  const doc = {
+  return {
     ...record,
+
     AccountName: record.AccountName || "",
     Invoice: record.Invoice || generateInvoice(transactionDate),
     Item: record.Item || "ISP-Client Payment",
     MOP: String(record.MOP || "CASH").toUpperCase(),
     MOPRef: record.MOPRef || record.Invoice || "",
+
     Cash: toNumber(record.Cash),
     CashAmount: toNumber(record.CashAmount),
     GCashAmount: toNumber(record.GCashAmount),
     ReceiptAmount: toNumber(record.ReceiptAmount || record.Cash),
+    Expenses: toNumber(record.Expenses),
+    Quantity: toNumber(record.Quantity),
+    SupplierPrice: toNumber(record.SupplierPrice),
+
     PaymentBreakdown: normalizePaymentBreakdown(record.PaymentBreakdown, record),
+
     TransferDate: cleanString(record.TransferDate || record.GCashTransferDate),
     GCashTransferDate: cleanString(record.GCashTransferDate || record.TransferDate),
     ReceiverLast4: cleanString(record.ReceiverLast4 || record.GCashReceiverLast4),
-    GCashReceiverLast4: cleanString(record.GCashReceiverLast4 || record.ReceiverLast4),
+    GCashReceiverLast4: cleanString(
+      record.GCashReceiverLast4 || record.ReceiverLast4
+    ),
+
     DeclaredBy: record.DeclaredBy || "",
+
     TransactionDate: transactionDate,
     createdAt: transactionDate,
     updatedAt: transactionDate,
-    PrintId: matchedPrintId
+
+    PrintId: matchedPrintId,
   };
-
-  if (record.Expenses !== undefined) {
-    doc.Expenses = toNumber(record.Expenses);
-  }
-
-  return doc;
 }
 
 async function migrate() {
@@ -205,12 +253,16 @@ async function migrate() {
     }
 
     console.log("Clearing existing print and earnings...");
-    await Promise.all([Print.deleteMany({}), Earning.deleteMany({})]);
+    await Promise.all([
+      Print.deleteMany({}),
+      Earning.deleteMany({}),
+    ]);
 
     const formattedPrint = printData.map(convertPrint);
     const insertedPrint = await Print.insertMany(formattedPrint);
 
     const printLookup = new Map();
+
     insertedPrint.forEach((row) => {
       buildLookupKeys(row).forEach((key) => {
         if (key && !printLookup.has(key)) {
@@ -230,16 +282,21 @@ async function migrate() {
     const insertedEarnings = await Earning.insertMany(formattedEarnings);
 
     const earningsByPrintId = new Map();
+
     insertedEarnings.forEach((row) => {
       if (!row.PrintId) return;
+
       const key = String(row.PrintId);
+
       if (!earningsByPrintId.has(key)) {
         earningsByPrintId.set(key, []);
       }
+
       earningsByPrintId.get(key).push(row._id);
     });
 
     const bulkPrintUpdates = [];
+
     earningsByPrintId.forEach((earningIds, printId) => {
       bulkPrintUpdates.push({
         updateOne: {
@@ -247,10 +304,10 @@ async function migrate() {
           update: {
             $set: {
               EarningIds: earningIds,
-              LinkedEarningCount: earningIds.length
-            }
-          }
-        }
+              LinkedEarningCount: earningIds.length,
+            },
+          },
+        },
       });
     });
 

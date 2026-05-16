@@ -21,6 +21,57 @@ exports.getClientBypassList = async (_req, res) => {
   }
 };
 
+exports.getClientBypassClients = async (_req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const [clients, bypassRows] = await Promise.all([
+      db
+        .collection(collections.clients)
+        .find(
+          {},
+          {
+            projection: {
+              AccountName: 1,
+              AccountNumber: 1,
+              AuthenticationMode: 1,
+              ClientName: 1,
+              MacAddress: 1,
+              macAddress: 1
+            }
+          }
+        )
+        .sort({ AccountName: 1, ClientName: 1 })
+        .toArray(),
+      db.collection(collections.clientBypass).find({}).toArray()
+    ]);
+    const bypassAccountKeys = new Set(
+      (bypassRows || [])
+        .map((row) => normalizeAccountName(row.AccountNameKey || row.AccountName))
+        .filter(Boolean)
+    );
+    const bypassClientIds = new Set(
+      (bypassRows || [])
+        .map((row) => String(row.ClientId || "").trim())
+        .filter(Boolean)
+    );
+    const rows = (clients || []).filter((client) => {
+      const authMode = String(client.AuthenticationMode || "").trim().toUpperCase();
+      const accountKey = normalizeAccountName(client.AccountName);
+      const clientId = String(client._id || "").trim();
+
+      return (
+        ["IPOE", "PPPOE"].includes(authMode) &&
+        !(accountKey && bypassAccountKeys.has(accountKey)) &&
+        !(clientId && bypassClientIds.has(clientId))
+      );
+    });
+
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.createClientBypass = async (req, res) => {
   try {
     const requestedClientId = String(req.body.clientId || req.body.ClientId || "").trim();
