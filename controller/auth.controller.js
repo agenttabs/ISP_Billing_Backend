@@ -3,10 +3,56 @@ const mongoose = require("mongoose");
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
 const JWT_SECRET = process.env.JWT_SECRET_KEY || "ISP_BILLING_SECRET_KEY";
+const APP_TIME_ZONE = process.env.APP_TIME_ZONE || "Asia/Manila";
+const WEEK_DAYS = [
+  "SUNDAY",
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY"
+];
 
 const normalizeUserType = (value) => {
   const normalized = String(value || "").trim().toUpperCase();
   return normalized === "EMPLOYEE" ? "TECHNICIAN" : normalized;
+};
+
+const normalizeScheduleDays = (value) => {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(",")
+        .map((item) => item.trim());
+
+  return [...new Set(source.map((item) => String(item || "").trim().toUpperCase()))]
+    .filter((day) => WEEK_DAYS.includes(day));
+};
+
+const getScheduleDaysFromBody = (body, fallback) =>
+  normalizeScheduleDays(
+    body.scheduleDays ??
+      body.ScheduleDays ??
+      body.scheduledDays ??
+      body.ScheduledDays ??
+      fallback
+  );
+
+const formatScheduleDay = (day) =>
+  String(day || "").toLowerCase().replace(/^\w/, (char) => char.toUpperCase());
+
+const getTodayScheduleDay = () =>
+  new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    timeZone: APP_TIME_ZONE
+  })
+    .format(new Date())
+    .toUpperCase();
+
+const isScheduledToday = (user) => {
+  const scheduleDays = normalizeScheduleDays(user.ScheduleDays);
+  return scheduleDays.includes(getTodayScheduleDay());
 };
 
 const sanitizeCredentialUser = (user) => ({
@@ -20,6 +66,7 @@ const sanitizeCredentialUser = (user) => ({
   Email: user.Email || "",
   FB: user.FB || "",
   Salary: user.Salary || "",
+  ScheduleDays: normalizeScheduleDays(user.ScheduleDays),
   TelegramChatID: user.TelegramChatID || "",
   TelegramToken: user.TelegramToken || ""
 });
@@ -102,16 +149,42 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: "Account is deactivated" });
     }
 
+    const userType = normalizeUserType(user.Type);
+    if (userType === "CASHIER" && !isScheduledToday(user)) {
+      const todayScheduleDay = getTodayScheduleDay();
+      await writeAuditLog({
+        req,
+        module: "AUTH",
+        action: "LOGIN",
+        targetType: "USER",
+        targetId: user.ID,
+        status: "FAILED",
+        summary: `Login failed: cashier is not scheduled for ${todayScheduleDay}.`,
+        accountName: user.Username,
+        details: {
+          username: user.Username,
+          name: user.Name,
+          scheduleDays: normalizeScheduleDays(user.ScheduleDays),
+          today: todayScheduleDay,
+          timeZone: APP_TIME_ZONE
+        }
+      });
+      return res.status(403).json({
+        error: `You are not scheduled to login today (${formatScheduleDay(todayScheduleDay)}). Please contact admin.`
+      });
+    }
+
     const userPayload = {
       _id: user.ID,
       id: user.ID,
       name: user.Name,
       username: user.Username,
-      type: normalizeUserType(user.Type),
+      type: userType,
       status: userStatus,
       restriction: user.Restriction || "",
       email: user.Email || "",
-      contact: user.Contact || ""
+      contact: user.Contact || "",
+      scheduleDays: normalizeScheduleDays(user.ScheduleDays)
     };
 
     const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: "1d" });
@@ -307,6 +380,10 @@ exports.createUser = async (req, res) => {
       Password: password,
       Restriction: String(req.body.restriction || "Default").trim(),
       Salary: String(req.body.salary || "").trim(),
+      ScheduleDays: getScheduleDaysFromBody(
+        req.body,
+        type === "CASHIER" ? WEEK_DAYS : []
+      ),
       Status: status === "DEACTIVE" ? "DEACTIVE" : "ACTIVE",
       TelegramChatID: "",
       TelegramToken: "",
@@ -386,6 +463,7 @@ exports.updateUser = async (req, res) => {
         req.body.restriction ?? existingUser.Restriction ?? "Default"
       ).trim(),
       Salary: String(req.body.salary ?? existingUser.Salary ?? "").trim(),
+      ScheduleDays: getScheduleDaysFromBody(req.body, existingUser.ScheduleDays),
       Status: status === "DEACTIVE" ? "DEACTIVE" : "ACTIVE",
       Type: type,
       Username: username,

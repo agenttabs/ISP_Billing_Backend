@@ -40,6 +40,13 @@ router.get(
 );
 
 router.get(
+  "/dashboard/expenses-today",
+  protect,
+  authorize("ADMIN", "CASHIER"),
+  controller.getDashboardExpensesToday
+);
+
+router.get(
   "/transactions",
   protect,
   authorize("ADMIN", "CASHIER"),

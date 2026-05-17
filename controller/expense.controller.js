@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const { ObjectId } = mongoose.Types;
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
+const APP_TIME_ZONE = process.env.APP_TIME_ZONE || "Asia/Manila";
 
 const normalizeAmount = (value) =>
   String(value ?? "")
@@ -13,6 +14,12 @@ const formatLogDate = (value) => {
   if (!value) {
     const now = new Date();
     return `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()}`;
+  }
+
+  const isoDate = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    const [year, month, day] = isoDate.split("-");
+    return `${Number(year)}/${Number(month)}/${Number(day)}`;
   }
 
   const date = new Date(value);
@@ -28,28 +35,95 @@ const formatLogDate = (value) => {
   return plain;
 };
 
-const buildExpensePayload = (body, req) => ({
-  Name: String(body?.Name || "").trim(),
-  Type: String(body?.Type || "").trim(),
-  Amount: normalizeAmount(body?.Amount),
-  Invoice: String(body?.Invoice || "").trim(),
-  LogDate: formatLogDate(body?.LogDate),
-  Docs: String(body?.Docs || "").trim(),
-  InCharge: String(
-    body?.InCharge ||
-      req?.user?.username ||
-      req?.user?.Username ||
-      req?.user?.name ||
-      req?.user?.Name ||
-      "admin"
-  ).trim()
+const getTodayLogDate = () => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric"
+  }).formatToParts(new Date());
+
+  const dateParts = Object.fromEntries(
+    parts
+      .filter((part) => ["year", "month", "day"].includes(part.type))
+      .map((part) => [part.type, part.value])
+  );
+
+  return `${dateParts.year}/${dateParts.month}/${dateParts.day}`;
+};
+
+const getActor = (req) => ({
+  id: String(req?.user?.id || req?.user?._id || "").trim(),
+  username: String(req?.user?.username || req?.user?.Username || "").trim(),
+  name: String(req?.user?.name || req?.user?.Name || "").trim(),
+  type: String(req?.user?.type || req?.user?.Type || "").trim().toUpperCase()
 });
 
-exports.getExpenses = async (_req, res) => {
+const getActorDisplay = (actor) =>
+  actor.name || actor.username || actor.id || "admin";
+
+const buildCashierExpenseFilter = (req) => {
+  const actor = getActor(req);
+
+  if (actor.type !== "CASHIER") {
+    return {};
+  }
+
+  const ownerValues = [actor.id, actor.username, actor.name].filter(Boolean);
+  if (!ownerValues.length) {
+    return { _id: null };
+  }
+
+  return {
+    $or: [
+      { InChargeId: { $in: ownerValues } },
+      { InCharge: { $in: ownerValues } },
+      { CreatedById: { $in: ownerValues } },
+      { CreatedBy: { $in: ownerValues } }
+    ],
+    LogDate: getTodayLogDate()
+  };
+};
+
+const canCashierAccessExpense = (existing, actor) => {
+  const ownerValues = [actor.id, actor.username, actor.name].filter(Boolean);
+  const existingOwnerValues = [
+    existing.InChargeId,
+    existing.InCharge,
+    existing.CreatedById,
+    existing.CreatedBy
+  ].map((value) => String(value || "").trim());
+
+  return (
+    existingOwnerValues.some((value) => ownerValues.includes(value)) &&
+    String(existing.LogDate || "").trim() === getTodayLogDate()
+  );
+};
+
+const buildExpensePayload = (body, req) => {
+  const actor = getActor(req);
+  const actorDisplay = getActorDisplay(actor);
+  const isCashier = actor.type === "CASHIER";
+
+  return {
+    Name: String(body?.Name || "").trim(),
+    Type: String(body?.Type || "").trim(),
+    Amount: normalizeAmount(body?.Amount),
+    Invoice: String(body?.Invoice || "").trim(),
+    LogDate: isCashier ? getTodayLogDate() : formatLogDate(body?.LogDate),
+    Docs: String(body?.Docs || "").trim(),
+    InCharge: actorDisplay,
+    InChargeId: actor.id,
+    CreatedBy: actorDisplay,
+    CreatedById: actor.id
+  };
+};
+
+exports.getExpenses = async (req, res) => {
   try {
     const rows = await mongoose.connection.db
       .collection(collections.expense)
-      .find({})
+      .find(buildCashierExpenseFilter(req))
       .sort({ createdAt: -1, LogDate: -1 })
       .toArray();
 
@@ -107,6 +181,15 @@ exports.updateExpense = async (req, res) => {
 
     if (!existing) {
       return res.status(404).json({ error: "Expense not found." });
+    }
+
+    const actor = getActor(req);
+    if (actor.type === "CASHIER") {
+      if (!canCashierAccessExpense(existing, actor)) {
+        return res.status(403).json({
+          error: "Cashier can only update today's own expenses."
+        });
+      }
     }
 
     const payload = {

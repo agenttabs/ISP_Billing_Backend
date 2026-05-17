@@ -36,6 +36,9 @@ const getEarningTransactionDateValue = (row) =>
 const getExpenseTransactionDateValue = (row) =>
   new Date(row.LogDate || row.createdAt || row.updatedAt || Date.now());
 
+const parseMoneyValue = (value) =>
+  Number(String(value || 0).replace(/,/g, "")) || 0;
+
 const normalizeActorToken = (value) =>
   String(value || "")
     .trim()
@@ -49,6 +52,64 @@ const buildTodayDateOrFilter = (...fieldNames) => {
   }));
 
   return clauses.length === 1 ? clauses[0] : { $or: clauses };
+};
+
+const getTodayExpenseLogDateValues = () => {
+  const today = getManilaTodayStart();
+  const year = today.getUTCFullYear();
+  const month = today.getUTCMonth() + 1;
+  const day = today.getUTCDate();
+  const paddedMonth = String(month).padStart(2, "0");
+  const paddedDay = String(day).padStart(2, "0");
+
+  return [
+    `${year}/${month}/${day}`,
+    `${year}/${paddedMonth}/${paddedDay}`,
+    `${year}-${paddedMonth}-${paddedDay}`
+  ];
+};
+
+const buildDashboardExpenseDateFilter = () => {
+  const { start, end } = getTodayRange();
+
+  return {
+    $or: [
+      { LogDate: { $in: getTodayExpenseLogDateValues() } },
+      { LogDate: { $gte: start, $lte: end } },
+      { createdAt: { $gte: start, $lte: end } }
+    ]
+  };
+};
+
+const buildDashboardExpenseOwnerFilter = (req) => {
+  const userType = String(req.user?.type || req.user?.role || "").trim().toUpperCase();
+  if (userType === "ADMIN") {
+    return null;
+  }
+
+  const actorValues = [
+    req.user?.id,
+    req.user?._id,
+    req.user?.username,
+    req.user?.Username,
+    req.user?.name,
+    req.user?.Name
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  if (!actorValues.length) {
+    return { _id: null };
+  }
+
+  return {
+    $or: [
+      { InChargeId: { $in: actorValues } },
+      { InCharge: { $in: actorValues } },
+      { CreatedById: { $in: actorValues } },
+      { CreatedBy: { $in: actorValues } }
+    ]
+  };
 };
 
 const getEmptyDashboardPaymentTotals = () => ({
@@ -954,6 +1015,44 @@ exports.getDashboardCollectionList = async (req, res) => {
   }
 };
 
+exports.getDashboardExpensesToday = async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const filterParts = [buildDashboardExpenseDateFilter()];
+    const ownerFilter = buildDashboardExpenseOwnerFilter(req);
+
+    if (ownerFilter) {
+      filterParts.push(ownerFilter);
+    }
+
+    const rows = await db
+      .collection(collections.expense)
+      .find(filterParts.length === 1 ? filterParts[0] : { $and: filterParts })
+      .sort({ createdAt: -1, LogDate: -1 })
+      .toArray();
+
+    const mappedRows = rows.map((row) => ({
+      rowId: String(row._id || row.Invoice || Math.random()),
+      transactionDate: getExpenseTransactionDateValue(row),
+      logDate: row.LogDate || "",
+      name: row.Name || "-",
+      type: row.Type || "Expense",
+      invoice: row.Invoice || "-",
+      amount: parseMoneyValue(row.Amount),
+      docs: row.Docs || "-",
+      inCharge: row.InCharge || row.CreatedBy || "-"
+    }));
+
+    res.json({
+      total: mappedRows.length,
+      amount: mappedRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+      rows: mappedRows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.getDashboardDisconnectionToday = async (_req, res) => {
   try {
     const clients = await mongoose.connection.db
@@ -1270,10 +1369,10 @@ exports.createTransaction = async (req, res) => {
       ClientId: req.body.ClientId || "",
       Type: req.body.Type || "Payment",
       MOP: topLevelPaymentFields.PaymentMethod,
-      CreatedBy: actor.display || req.body.CreatedBy || "",
-      CreatedById: actor.id || req.body.CreatedById || "",
-      Cashier: actor.display || req.body.Cashier || "",
-      CashierId: actor.id || req.body.CashierId || "",
+      CreatedBy: actor.display || "",
+      CreatedById: actor.id || "",
+      Cashier: actor.display || "",
+      CashierId: actor.id || "",
       Verified: typeof req.body.Verified === "boolean" ? req.body.Verified : false,
       TransactionDate: req.body.TransactionDate
         ? new Date(req.body.TransactionDate)
@@ -1323,12 +1422,12 @@ exports.createEarning = async (req, res) => {
     const actor = getRequestActor(req);
     const payload = {
       ...req.body,
-      DeclaredBy: actor.display || req.body.DeclaredBy || "",
-      DeclaredById: actor.id || req.body.DeclaredById || "",
-      CreatedBy: actor.display || req.body.CreatedBy || req.body.DeclaredBy || "",
-      CreatedById: actor.id || req.body.CreatedById || req.body.DeclaredById || "",
-      Cashier: actor.display || req.body.Cashier || req.body.DeclaredBy || "",
-      CashierId: actor.id || req.body.CashierId || req.body.DeclaredById || "",
+      DeclaredBy: actor.display || "",
+      DeclaredById: actor.id || "",
+      CreatedBy: actor.display || "",
+      CreatedById: actor.id || "",
+      Cashier: actor.display || "",
+      CashierId: actor.id || "",
       TransactionDate: req.body.TransactionDate
         ? new Date(req.body.TransactionDate)
         : new Date(),
