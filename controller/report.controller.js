@@ -522,6 +522,19 @@ const getDashboardActorFilter = (req) => {
   };
 };
 
+const getRequestActor = (req) => {
+  const actorId = String(req.user?.id || req.user?._id || req.user?.ID || "").trim();
+  const actorName = String(
+    req.user?.name || req.user?.Name || req.user?.username || req.user?.Username || ""
+  ).trim();
+
+  return {
+    id: actorId,
+    name: actorName,
+    display: actorName || actorId
+  };
+};
+
 const getDashboardTodayEarnings = (earningsRows = [], req) => {
   const actorType = String(req.user?.type || req.user?.role || "").trim().toUpperCase();
 
@@ -1189,6 +1202,7 @@ exports.getTransactions = async (req, res) => {
               PrintId: 1,
               ReceiptAmount: 1,
               ReferenceNumber: 1,
+              ReceiptImage: 1,
               ReceiverLast4: 1,
               TransferDate: 1,
               TransactionDate: 1,
@@ -1249,12 +1263,17 @@ exports.createTransaction = async (req, res) => {
   try {
     const normalizedPaymentFields = getTopLevelPaymentFields(req.body);
     const { PaymentBreakdown, ...topLevelPaymentFields } = normalizedPaymentFields;
+    const actor = getRequestActor(req);
     const payload = {
       ...req.body,
       ...topLevelPaymentFields,
       ClientId: req.body.ClientId || "",
       Type: req.body.Type || "Payment",
       MOP: topLevelPaymentFields.PaymentMethod,
+      CreatedBy: actor.display || req.body.CreatedBy || "",
+      CreatedById: actor.id || req.body.CreatedById || "",
+      Cashier: actor.display || req.body.Cashier || "",
+      CashierId: actor.id || req.body.CashierId || "",
       Verified: typeof req.body.Verified === "boolean" ? req.body.Verified : false,
       TransactionDate: req.body.TransactionDate
         ? new Date(req.body.TransactionDate)
@@ -1301,8 +1320,15 @@ exports.createTransaction = async (req, res) => {
 
 exports.createEarning = async (req, res) => {
   try {
+    const actor = getRequestActor(req);
     const payload = {
       ...req.body,
+      DeclaredBy: actor.display || req.body.DeclaredBy || "",
+      DeclaredById: actor.id || req.body.DeclaredById || "",
+      CreatedBy: actor.display || req.body.CreatedBy || req.body.DeclaredBy || "",
+      CreatedById: actor.id || req.body.CreatedById || req.body.DeclaredById || "",
+      Cashier: actor.display || req.body.Cashier || req.body.DeclaredBy || "",
+      CashierId: actor.id || req.body.CashierId || req.body.DeclaredById || "",
       TransactionDate: req.body.TransactionDate
         ? new Date(req.body.TransactionDate)
         : new Date(),
