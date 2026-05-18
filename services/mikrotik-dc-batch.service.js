@@ -116,6 +116,8 @@ const buildRow = ({
   oldProfile,
   oldNetPlan,
   nextPlan,
+  dueDate,
+  disconnectDate,
   detail
 }) => ({
   result,
@@ -125,8 +127,26 @@ const buildRow = ({
   oldProfile: oldProfile || "-",
   oldNetPlan: oldNetPlan || "-",
   nextPlan: nextPlan || "-",
+  dueDate: dueDate || "-",
+  disconnectDate: disconnectDate || "-",
   detail: detail || ""
 });
+
+const getDueDateSortValue = (row) => {
+  const dueDate = parseDateOnly(row?.dueDate);
+  return dueDate ? dueDate.getTime() : Number.MAX_SAFE_INTEGER;
+};
+
+const sortRowsByDueDate = (rows = []) =>
+  [...rows].sort((a, b) => {
+    const dueDateDiff = getDueDateSortValue(b) - getDueDateSortValue(a);
+
+    if (dueDateDiff !== 0) {
+      return dueDateDiff;
+    }
+
+    return String(a?.accountName || "").localeCompare(String(b?.accountName || ""));
+  });
 
 const getManilaDateParts = (date = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -396,6 +416,8 @@ const generateMikrotikDcBatchReport = async ({
         oldProfile,
         oldNetPlan,
         nextPlan: nextPlanValue,
+        dueDate: formatDateOnlyUtc(dueDate),
+        disconnectDate: formatDateOnlyUtc(disconnectDate),
         detail: `${detail} ${overdueDays > 0 ? `Overdue by ${overdueDays} day(s) past disconnect date.` : "Ready for disconnect today."}`
       })
     );
@@ -465,6 +487,7 @@ const generateMikrotikDcBatchReport = async ({
     }
   }
 
+  const sortedRows = sortRowsByDueDate(rows);
   const generatedAt = new Date();
   const summary = {
     checkedCount,
@@ -509,7 +532,7 @@ const generateMikrotikDcBatchReport = async ({
     applied: applyChanges,
     config,
     summary,
-    rows
+    rows: sortedRows
   };
 };
 

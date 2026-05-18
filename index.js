@@ -42,7 +42,8 @@ app.use(morgan("dev"));
 
 // middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: process.env.JSON_BODY_LIMIT || "2mb" }));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,

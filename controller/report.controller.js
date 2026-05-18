@@ -214,6 +214,39 @@ const isUnpaidClient = (client) => {
   return Number.isFinite(amountDue) && amountDue > 0;
 };
 
+const normalizeBypassAccountKey = (value) =>
+  String(value || "")
+    .trim()
+    .toUpperCase();
+
+const buildBypassLookup = (bypassRows = []) => ({
+  accountKeys: new Set(
+    (bypassRows || [])
+      .map((row) => normalizeBypassAccountKey(row?.AccountNameKey || row?.AccountName))
+      .filter(Boolean)
+  ),
+  clientIds: new Set(
+    (bypassRows || [])
+      .map((row) => String(row?.ClientId || "").trim())
+      .filter(Boolean)
+  )
+});
+
+const isBypassDashboardClient = (client, bypassLookup) => {
+  const accountKey = normalizeBypassAccountKey(client?.AccountName);
+  const clientId = String(client?._id || "").trim();
+
+  return (
+    (accountKey && bypassLookup.accountKeys.has(accountKey)) ||
+    (clientId && bypassLookup.clientIds.has(clientId))
+  );
+};
+
+const excludeBypassDashboardClients = (clients = [], bypassRows = []) => {
+  const bypassLookup = buildBypassLookup(bypassRows);
+  return (clients || []).filter((client) => !isBypassDashboardClient(client, bypassLookup));
+};
+
 const getDisconnectionTodayRows = (clients = []) => {
   const todayStart = getManilaTodayStart();
   const graceDays =
@@ -1055,14 +1088,21 @@ exports.getDashboardExpensesToday = async (req, res) => {
 
 exports.getDashboardDisconnectionToday = async (_req, res) => {
   try {
-    const clients = await mongoose.connection.db
-      .collection(collections.clients)
-      .find({})
-      .toArray();
+    const [clients, bypassRows] = await Promise.all([
+      mongoose.connection.db
+        .collection(collections.clients)
+        .find({})
+        .toArray(),
+      mongoose.connection.db
+        .collection(collections.clientBypass)
+        .find({})
+        .toArray()
+    ]);
+    const dashboardClients = excludeBypassDashboardClients(clients, bypassRows);
 
-    const rows = getDisconnectionTodayRows(clients);
+    const rows = getDisconnectionTodayRows(dashboardClients);
     const clientMap = new Map(
-      clients.map((client) => [String(client?._id || "").trim(), client])
+      dashboardClients.map((client) => [String(client?._id || "").trim(), client])
     );
     let snapshot = { pppSecrets: [], dhcpLeases: [] };
 
@@ -1149,12 +1189,18 @@ exports.getDashboardDisconnectionToday = async (_req, res) => {
 
 exports.getDashboardDueToday = async (_req, res) => {
   try {
-    const clients = await mongoose.connection.db
-      .collection(collections.clients)
-      .find({})
-      .toArray();
+    const [clients, bypassRows] = await Promise.all([
+      mongoose.connection.db
+        .collection(collections.clients)
+        .find({})
+        .toArray(),
+      mongoose.connection.db
+        .collection(collections.clientBypass)
+        .find({})
+        .toArray()
+    ]);
 
-    const rows = getDueTodayRows(clients);
+    const rows = getDueTodayRows(excludeBypassDashboardClients(clients, bypassRows));
     res.json({
       total: rows.length,
       rows
@@ -1166,12 +1212,18 @@ exports.getDashboardDueToday = async (_req, res) => {
 
 exports.getDashboardPastDueUnpaid = async (_req, res) => {
   try {
-    const clients = await mongoose.connection.db
-      .collection(collections.clients)
-      .find({})
-      .toArray();
+    const [clients, bypassRows] = await Promise.all([
+      mongoose.connection.db
+        .collection(collections.clients)
+        .find({})
+        .toArray(),
+      mongoose.connection.db
+        .collection(collections.clientBypass)
+        .find({})
+        .toArray()
+    ]);
 
-    const rows = getPastDueUnpaidRows(clients);
+    const rows = getPastDueUnpaidRows(excludeBypassDashboardClients(clients, bypassRows));
     res.json({
       total: rows.length,
       rows
