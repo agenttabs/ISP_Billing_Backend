@@ -241,6 +241,21 @@ const formatDisconnectRemark = (date = new Date()) => {
   return `Disconnected by DC Batch on ${dateKey} ${timeKey}`;
 };
 
+const appendClientNote = (currentNote, nextNote) => {
+  const existing = String(currentNote || "").trim();
+  const next = String(nextNote || "").trim();
+
+  if (!next) {
+    return existing;
+  }
+
+  if (!existing) {
+    return next;
+  }
+
+  return `${existing}\n${next}`;
+};
+
 const getMinutesFromTimeKey = (value) => {
   const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
 
@@ -394,6 +409,7 @@ const generateMikrotikDcBatchReport = async ({
       authMode === "PPPOE" ? PPP_DISCONNECTED_PROFILE : disconnectedPlanName,
       Number(client?.AmountDue ?? 0)
     );
+    const disconnectRemark = formatDisconnectRemark(new Date());
     const updatePayload = {
       PreviousAuthenticationMode: client?.AuthenticationMode || "",
       PreviousProfile: oldProfile,
@@ -403,6 +419,7 @@ const generateMikrotikDcBatchReport = async ({
       NetPlan: disconnectedPlanName,
       AmountDue: disconnectedAmountDue,
       Status: "DISCONNECTED",
+      Note: appendClientNote(client?.Note || client?.Notes || "", disconnectRemark),
       updatedAt: new Date()
     };
     let detail = `Due date ${formatDateOnlyUtc(dueDate)} exceeded the ${graceDays}-day grace period. Disconnect date ${formatDateOnlyUtc(disconnectDate)}.`;
@@ -424,7 +441,6 @@ const generateMikrotikDcBatchReport = async ({
 
     if (applyChanges && client?._id) {
       if (authMode === "PPPOE") {
-        const disconnectRemark = formatDisconnectRemark(new Date());
         let pppoeSecretMissing = false;
 
         try {

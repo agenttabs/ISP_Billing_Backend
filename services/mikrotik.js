@@ -613,6 +613,51 @@ const isRouterOsEmptyReplyError = (err) => {
     return errno === "UNKNOWNREPLY" && message.includes("!EMPTY");
 };
 
+const removePPPoEActiveConnection = async (username) => {
+    const userNameValue = String(username || "").trim();
+
+    if (!userNameValue) {
+        throw new Error("PPPoE username is required.");
+    }
+
+    const server = await getMikrotikConfigAC();
+    const client = new RouterOSClient({
+        host: server.Address,
+        user: server.User,
+        password: server.Password,
+        port: parseInt(server.Port) || 8728
+    });
+
+    try {
+        const conn = await client.connect();
+        const activeUsers = await conn
+            .menu("/ppp/active")
+            .where({ name: userNameValue })
+            .proplist([".id", "name", "address", "uptime"])
+            .get();
+
+        let removedCount = 0;
+
+        for (const active of activeUsers || []) {
+            const activeId = active?.[".id"] || active?.id;
+            if (!activeId) {
+                continue;
+            }
+
+            await conn.menu("/ppp/active").remove(activeId);
+            removedCount += 1;
+        }
+
+        return {
+            username: userNameValue,
+            removedCount,
+            activeFound: Array.isArray(activeUsers) ? activeUsers.length : 0
+        };
+    } finally {
+        client.close();
+    }
+};
+
 const parseTrafficNumber = (value) => {
     if (value === null || value === undefined || value === "") {
         return 0;
@@ -1331,6 +1376,7 @@ module.exports = {
     getClientMikrotikStatus,
     getMikrotikCheckerSnapshot,
     updatePPPoEUser: updatePPPoEUserSafe,
+    removePPPoEActiveConnection,
     disconnectPPPoEUser,
     addDisconnectScheduler,
     removeScheduler,

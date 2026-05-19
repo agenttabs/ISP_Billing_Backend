@@ -45,6 +45,12 @@ router.put(
   controller.adjustClientDueDate
 );
 router.post(
+  "/clients/:id/refresh-mode",
+  protect,
+  authorize("ADMIN", "CASHIER"),
+  controller.refreshClientPppoeMode
+);
+router.post(
   "/clients/:id/repair",
   protect,
   authorize("ADMIN", "CASHIER"),

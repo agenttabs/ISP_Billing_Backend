@@ -8,7 +8,7 @@ const {
 } = require("../services/sms.service");
 const { emitClientsChanged } = require("../services/realtime.service");
 
-const { addPPPoEUser, addIpoeDisconnectScheduler, checkPPPoEUser, clearIpoeLeaseComment, updatePPPoEUser, disconnectPPPoEUser, addDisconnectScheduler, removeScheduler, getDhcpLeaseByMacAddress, getDhcpLeasesNoComment, getDhcpLeasesWithComments, setIpoeLeaseStatic, getClientMikrotikStatus } = require("../services/mikrotik");
+const { addPPPoEUser, addIpoeDisconnectScheduler, checkPPPoEUser, clearIpoeLeaseComment, updatePPPoEUser, disconnectPPPoEUser, removePPPoEActiveConnection, addDisconnectScheduler, removeScheduler, getDhcpLeaseByMacAddress, getDhcpLeasesNoComment, getDhcpLeasesWithComments, setIpoeLeaseStatic, getClientMikrotikStatus } = require("../services/mikrotik");
 
 
 
@@ -562,6 +562,55 @@ exports.adjustClientDueDate = async (req, res) => {
     });
   } catch (err) {
     console.error("❌ ADJUST DUE DATE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.refreshClientPppoeMode = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const objectId = new mongoose.Types.ObjectId(id);
+    const client = await mongoose.connection.db
+      .collection(collections.clients)
+      .findOne({ _id: objectId });
+
+    if (!client) {
+      return res.status(404).json({ error: "Client not found." });
+    }
+
+    const authMode = String(client.AuthenticationMode || "").trim().toUpperCase();
+    if (authMode !== "PPPOE") {
+      return res.status(400).json({ error: "Refresh mode is only available for PPPoE clients." });
+    }
+
+    const accountName = String(client.AccountName || "").trim();
+    if (!accountName) {
+      return res.status(400).json({ error: "Client account name is required to refresh PPPoE mode." });
+    }
+
+    const result = await removePPPoEActiveConnection(accountName);
+
+    res.json({
+      message:
+        result.removedCount > 0
+          ? "PPPoE active connection removed. The client can reconnect now."
+          : "No active PPPoE connection found for this client.",
+      ...result
+    });
+
+    await writeAuditLog({
+      req,
+      module: "CLIENT",
+      action: "REFRESH_PPPOE_MODE",
+      targetType: "CLIENT",
+      targetId: id,
+      accountName,
+      status: "SUCCESS",
+      summary: "Client PPPoE active connection refreshed.",
+      details: result
+    });
+  } catch (err) {
+    console.error("PPPOE REFRESH MODE ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 };
