@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const collections = require("../config/collections");
+const { DEFAULT_COMPANY_NAME, getCompanyName } = require("./system-settings.service");
 
 const DEFAULT_ZITA_SMS_URL =
   process.env.ZITA_SMS_URL || "https://www.zitasms.com/api/send/sms";
@@ -352,8 +353,10 @@ exports.sendPaymentReceivedSms = async ({
     };
   }
 
+  const companyName = await getCompanyName().catch(() => DEFAULT_COMPANY_NAME);
   const message = replaceSmsTokens(template.Body, {
     ClientName: client?.ClientName || client?.AccountName || "",
+    CompanyName: companyName,
     AccountNumber: client?.AccountNumber || "",
     MonthlyDue: formatPeso(monthlyDue),
     SubscriptionCover: subscriptionCover || "",
@@ -421,8 +424,10 @@ exports.sendPaymentReminderSms = async ({
     };
   }
 
+  const companyName = await getCompanyName().catch(() => DEFAULT_COMPANY_NAME);
   const message = replaceSmsTokens(template.Body, {
     ClientName: client?.ClientName || client?.AccountName || "",
+    CompanyName: companyName,
     AccountNumber: client?.AccountNumber || "",
     MonthlyDue: formatPeso(monthlyDue),
     SubscriptionCover: subscriptionCover || "",

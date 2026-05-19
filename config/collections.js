@@ -17,6 +17,7 @@ const collections = {
   credentials: process.env.CREDENTIALS_COLLECTION || "credential",
   emailNotification: process.env.EMAIL_NOTIFICATION_COLLECTION || "EmailNotification",
   printReceipt: process.env.PRINT_RECEIPT_COLLECTION || "PrintReceipt",
+  systemSettings: process.env.SYSTEM_SETTINGS_COLLECTION || "SystemSettings",
   mikrotikChecker: process.env.MIKROTIK_CHECKER_COLLECTION || "MikrotikChecker",
   mikrotikDcBatch: process.env.MIKROTIK_DC_BATCH_COLLECTION || "MikrotikDcBatch",
   mikrotikDueDisconnectBatch:

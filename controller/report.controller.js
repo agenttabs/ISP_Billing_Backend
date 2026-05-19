@@ -3,6 +3,7 @@ const { ObjectId } = mongoose.Types;
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
 const { getMikrotikCheckerSnapshot } = require("../services/mikrotik");
+const { getDisconnectAfterDueDays } = require("../services/system-settings.service");
 
 const isDisconnectedClient = (client) => {
   const planValue = String(
@@ -148,8 +149,6 @@ const getClientInstallDateValue = (client) => {
 const getRepairLogDateValue = (row) =>
   new Date(row?.createdAt || row?.updatedAt || Date.now());
 
-const DISCONNECT_AFTER_DAYS = Number(process.env.DISCONNECT_AFTER_DAYS || 15);
-
 const parseDateOnly = (value) => {
   if (!value) {
     return null;
@@ -225,6 +224,11 @@ const buildBypassLookup = (bypassRows = []) => ({
       .map((row) => normalizeBypassAccountKey(row?.AccountNameKey || row?.AccountName))
       .filter(Boolean)
   ),
+  accountNumbers: new Set(
+    (bypassRows || [])
+      .map((row) => normalizeAccountNumber(row?.AccountNumberKey || row?.AccountNumber))
+      .filter(Boolean)
+  ),
   clientIds: new Set(
     (bypassRows || [])
       .map((row) => String(row?.ClientId || "").trim())
@@ -234,10 +238,12 @@ const buildBypassLookup = (bypassRows = []) => ({
 
 const isBypassDashboardClient = (client, bypassLookup) => {
   const accountKey = normalizeBypassAccountKey(client?.AccountName);
+  const accountNumber = normalizeAccountNumber(client?.AccountNumber);
   const clientId = String(client?._id || "").trim();
 
   return (
     (accountKey && bypassLookup.accountKeys.has(accountKey)) ||
+    (accountNumber && bypassLookup.accountNumbers.has(accountNumber)) ||
     (clientId && bypassLookup.clientIds.has(clientId))
   );
 };
@@ -247,12 +253,8 @@ const excludeBypassDashboardClients = (clients = [], bypassRows = []) => {
   return (clients || []).filter((client) => !isBypassDashboardClient(client, bypassLookup));
 };
 
-const getDisconnectionTodayRows = (clients = []) => {
+const getDisconnectionTodayRows = (clients = [], graceDays = 15) => {
   const todayStart = getManilaTodayStart();
-  const graceDays =
-    Number.isFinite(DISCONNECT_AFTER_DAYS) && DISCONNECT_AFTER_DAYS >= 0
-      ? DISCONNECT_AFTER_DAYS
-      : 15;
 
   return clients
     .filter((client) => {
@@ -293,16 +295,9 @@ const getDisconnectionTodayRows = (clients = []) => {
     .sort((a, b) => a.accountName.localeCompare(b.accountName));
 };
 
-const buildClientScheduleRow = (client, todayStart) => {
+const buildClientScheduleRow = (client, todayStart, graceDays = 15) => {
   const dueDate = parseDateOnly(client?.DueDate);
-  const disconnectDate = dueDate
-    ? addDaysUtc(
-        dueDate,
-        Number.isFinite(DISCONNECT_AFTER_DAYS) && DISCONNECT_AFTER_DAYS >= 0
-          ? DISCONNECT_AFTER_DAYS
-          : 15
-      )
-    : null;
+  const disconnectDate = dueDate ? addDaysUtc(dueDate, graceDays) : null;
 
   const daysPastDue = dueDate
     ? Math.max(
@@ -335,7 +330,7 @@ const getDashboardQualifiedClients = (clients = []) =>
     return !isClientPlanDisconnected(client) && isUnpaidClient(client) && parseDateOnly(client?.DueDate);
   });
 
-const getDueTodayRows = (clients = []) => {
+const getDueTodayRows = (clients = [], graceDays = 15) => {
   const todayStart = getManilaTodayStart();
 
   return getDashboardQualifiedClients(clients)
@@ -343,11 +338,11 @@ const getDueTodayRows = (clients = []) => {
       const dueDate = parseDateOnly(client?.DueDate);
       return dueDate && dueDate.getTime() === todayStart.getTime();
     })
-    .map((client) => buildClientScheduleRow(client, todayStart))
+    .map((client) => buildClientScheduleRow(client, todayStart, graceDays))
     .sort((a, b) => a.accountName.localeCompare(b.accountName));
 };
 
-const getPastDueUnpaidRows = (clients = []) => {
+const getPastDueUnpaidRows = (clients = [], graceDays = 15) => {
   const todayStart = getManilaTodayStart();
 
   return getDashboardQualifiedClients(clients)
@@ -355,11 +350,12 @@ const getPastDueUnpaidRows = (clients = []) => {
       const dueDate = parseDateOnly(client?.DueDate);
       return dueDate && dueDate.getTime() < todayStart.getTime();
     })
-    .map((client) => buildClientScheduleRow(client, todayStart))
+    .map((client) => buildClientScheduleRow(client, todayStart, graceDays))
     .sort((a, b) => b.daysPastDue - a.daysPastDue || a.accountName.localeCompare(b.accountName));
 };
 
 const getDashboardClientProjection = () => ({
+  AccountNumber: 1,
   AccountName: 1,
   ClientName: 1,
   AuthenticationMode: 1,
@@ -375,15 +371,13 @@ const getDashboardClientProjection = () => ({
   ContactNumber: 1,
   Mobile: 1,
   Phone: 1,
-  Address: 1
+  Address: 1,
+  MacAddress: 1,
+  macAddress: 1
 });
 
-const summarizeDashboardClients = (clients = []) => {
+const summarizeDashboardClients = (clients = [], graceDays = 15) => {
   const todayStart = getManilaTodayStart();
-  const graceDays =
-    Number.isFinite(DISCONNECT_AFTER_DAYS) && DISCONNECT_AFTER_DAYS >= 0
-      ? DISCONNECT_AFTER_DAYS
-      : 15;
   const summary = {
     activeClients: 0,
     pppoeClients: 0,
@@ -458,18 +452,30 @@ const normalizePaymentMethod = (value) =>
 const getPaymentBreakdownLines = (row) => {
   if (Array.isArray(row?.PaymentBreakdown) && row.PaymentBreakdown.length) {
     return row.PaymentBreakdown
-      .map((line) => ({
-        Method: normalizePaymentMethod(line?.Method || line?.PaymentMethod),
-        Amount: Number(line?.Amount || 0),
-        Reference: normalizeReferenceValue(line?.Reference),
-        ReceiptAmount: Number(line?.ReceiptAmount || line?.Amount || 0),
+      .map((line) => {
+        const method = normalizePaymentMethod(line?.Method || line?.PaymentMethod);
+        const reference =
+          method === "CASH"
+            ? ""
+            : normalizeReferenceValue(
+                line?.Reference || row?.MOPRef || row?.ReferenceNumber || row?.TransactionCode || ""
+              );
+
+        return {
+          Method: method,
+          Amount: Number(line?.Amount || 0),
+          Reference: reference,
+          ReceiptAmount: Number(
+            line?.ReceiptAmount || row?.ReceiptAmount || row?.TotalAmount || row?.Cash || line?.Amount || 0
+          ),
           TransferDate: normalizeCommentValue(
             line?.TransferDate || line?.DateOfTransfer || line?.GCashTransferDate || row?.TransferDate || row?.GCashTransferDate
           ),
           ReceiverLast4: normalizeCommentValue(
             line?.ReceiverLast4 || line?.GCashReceiverLast4 || row?.ReceiverLast4 || row?.GCashReceiverLast4
           )
-        }))
+        };
+      })
       .filter((line) => line.Method && line.Amount > 0);
   }
 
@@ -1004,7 +1010,8 @@ exports.getDashboardSummary = async (req, res) => {
       .collection(collections.clients)
       .find({}, { projection: getDashboardClientProjection() })
       .toArray();
-    const clientSummary = summarizeDashboardClients(clients);
+    const graceDays = await getDisconnectAfterDueDays();
+    const clientSummary = summarizeDashboardClients(clients, graceDays);
     const paymentTotals =
       userType === "ADMIN"
         ? await getDashboardPaymentTotalsFromEarnings(db)
@@ -1100,7 +1107,8 @@ exports.getDashboardDisconnectionToday = async (_req, res) => {
     ]);
     const dashboardClients = excludeBypassDashboardClients(clients, bypassRows);
 
-    const rows = getDisconnectionTodayRows(dashboardClients);
+    const graceDays = await getDisconnectAfterDueDays();
+    const rows = getDisconnectionTodayRows(dashboardClients, graceDays);
     const clientMap = new Map(
       dashboardClients.map((client) => [String(client?._id || "").trim(), client])
     );
@@ -1200,7 +1208,8 @@ exports.getDashboardDueToday = async (_req, res) => {
         .toArray()
     ]);
 
-    const rows = getDueTodayRows(excludeBypassDashboardClients(clients, bypassRows));
+    const graceDays = await getDisconnectAfterDueDays();
+    const rows = getDueTodayRows(excludeBypassDashboardClients(clients, bypassRows), graceDays);
     res.json({
       total: rows.length,
       rows
@@ -1223,9 +1232,88 @@ exports.getDashboardPastDueUnpaid = async (_req, res) => {
         .toArray()
     ]);
 
-    const rows = getPastDueUnpaidRows(excludeBypassDashboardClients(clients, bypassRows));
+    const graceDays = await getDisconnectAfterDueDays();
+    const rows = getPastDueUnpaidRows(excludeBypassDashboardClients(clients, bypassRows), graceDays);
     res.json({
       total: rows.length,
+      rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getPullOutReport = async (req, res) => {
+  try {
+    const requestedDays = Number(req.query.days || 30);
+    const overdueDays =
+      Number.isFinite(requestedDays) && requestedDays >= 0
+        ? Math.floor(requestedDays)
+        : 30;
+    const todayStart = getManilaTodayStart();
+
+    const [clients, bypassRows] = await Promise.all([
+      mongoose.connection.db
+        .collection(collections.clients)
+        .find({}, { projection: getDashboardClientProjection() })
+        .toArray(),
+      mongoose.connection.db
+        .collection(collections.clientBypass)
+        .find({})
+        .toArray()
+    ]);
+
+    const rows = getDashboardQualifiedClients(
+      excludeBypassDashboardClients(clients, bypassRows)
+    )
+      .map((client) => {
+        const dueDate = parseDateOnly(client?.DueDate);
+        const daysPastDue = dueDate
+          ? Math.max(
+              0,
+              Math.floor((todayStart.getTime() - dueDate.getTime()) / (24 * 60 * 60 * 1000))
+            )
+          : 0;
+        const eligibleDate = dueDate ? addDaysUtc(dueDate, overdueDays) : null;
+
+        return {
+          clientId: String(client?._id || "").trim(),
+          accountNumber: client?.AccountNumber || "-",
+          accountName: client?.AccountName || "-",
+          clientName: client?.ClientName || "-",
+          authMode: String(client?.AuthenticationMode || "").trim().toUpperCase() || "-",
+          netPlan: client?.NetPlan || client?.Profile || client?.Plan || "-",
+          dueDate: dueDate ? dueDate.toISOString().slice(0, 10) : String(client?.DueDate || "-"),
+          eligibleDate: eligibleDate ? eligibleDate.toISOString().slice(0, 10) : "-",
+          daysPastDue,
+          amountDue: Number(client?.AmountDue ?? client?.amountDue ?? 0) || 0,
+          paymentStatus: client?.PaymentStatus || "-",
+          contactNumber: client?.ContactNumber || client?.Mobile || client?.Phone || "-",
+          address: client?.Address || "-"
+        };
+      })
+      .filter((row) => row.daysPastDue >= overdueDays)
+      .sort((a, b) => b.daysPastDue - a.daysPastDue || a.accountName.localeCompare(b.accountName));
+
+    await writeAuditLog({
+      req,
+      module: "REPORT",
+      action: "GET_PULL_OUT_REPORT",
+      targetType: "CLIENT",
+      status: "SUCCESS",
+      summary: "Pull out report generated.",
+      details: {
+        overdueDays,
+        rowCount: rows.length
+      }
+    });
+
+    res.json({
+      summary: {
+        overdueDays,
+        asOfDate: todayStart.toISOString().slice(0, 10),
+        rowCount: rows.length
+      },
       rows
     });
   } catch (err) {

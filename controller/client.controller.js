@@ -30,7 +30,9 @@ async function run() {
 
 const isDisconnectedPlanValue = (...values) =>
   values.some((value) =>
-    String(value || "").toUpperCase().includes("DISCONNECTION")
+    String(value || "").toUpperCase().includes("DISCONNECTION") ||
+    String(value || "").toUpperCase().includes("DISCONNECTED") ||
+    String(value || "").toUpperCase() === "DC-PUTOL"
   );
 
 const parseAmountValue = (value) => {
@@ -279,6 +281,14 @@ exports.updateClient = async (req, res) => {
       nextProfileValue,
       nextNetPlanValue
     );
+    const pullOutCommentMatch = String(updateData.Note || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .reverse()
+      .find((line) => /pull\s*out/i.test(line));
+    const pppoeDisconnectRemark =
+      pullOutCommentMatch || (nextIsDisconnectedPlan ? "Disconnected by billing" : "");
     const macAddressForDisconnectCheck = String(
       normalizedMacAddress || oldClient.MacAddress || oldClient.macAddress || ""
     ).trim().toUpperCase();
@@ -326,7 +336,8 @@ exports.updateClient = async (req, res) => {
           username: oldClient.AccountName,
           password: oldClient.Password || updateData.Password || "",
           profile: PPP_DISCONNECTED_PROFILE,
-          location: updateData.ServerLocation || oldClient.ServerLocation
+          location: updateData.ServerLocation || oldClient.ServerLocation,
+          disconnectRemark: pppoeDisconnectRemark
         });
         await disconnectPPPoEUser(
           oldClient.AccountName,
@@ -342,8 +353,15 @@ exports.updateClient = async (req, res) => {
           username: updateData.AccountName,
           password: updateData.Password,
           profile: updateData.Profile,
-          location: updateData.ServerLocation || oldClient.ServerLocation
+          location: updateData.ServerLocation || oldClient.ServerLocation,
+          disconnectRemark: nextIsDisconnectedPlan ? pppoeDisconnectRemark : ""
         });
+        if (nextIsDisconnectedPlan) {
+          await disconnectPPPoEUser(
+            nextAccountName,
+            updateData.ServerLocation || oldClient.ServerLocation
+          );
+        }
         console.log("=== CLIENT CONTROLLER PPP UPDATE DONE ===");
       }
 

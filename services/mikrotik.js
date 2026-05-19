@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const { RouterOSClient } = require("routeros-client");
 const { Channel, RosException } = require("node-routeros");
 const collections = require("../config/collections");
+const { getDisconnectAfterDueDays } = require("./system-settings.service");
 const normalizeServerType = (value) => String(value || "").trim().toUpperCase();
 const getRouterOsPort = (value) => {
     const parsed = parseInt(value, 10);
@@ -311,7 +312,8 @@ const addDisconnectScheduler = async ({ username, dueDate, location }) => {
         throw new Error("Missing username or dueDate");
     }
 
-    const triggerDate = addDays(dueDate, 15);
+    const graceDays = await getDisconnectAfterDueDays();
+    const triggerDate = addDays(dueDate, graceDays);
     const { date, time } = formatMikrotikDate(triggerDate);
 
     const server = await getMikrotikConfigAC();
@@ -1074,7 +1076,8 @@ const addIpoeDisconnectScheduler = async ({ username, dueDate, macAddress, locat
         throw new Error("Missing username, dueDate, or macAddress");
     }
 
-    const triggerDate = addDays(dueDate, 15);
+    const graceDays = await getDisconnectAfterDueDays();
+    const triggerDate = addDays(dueDate, graceDays);
     const { date, time } = formatMikrotikDate(triggerDate);
     const server = await getMikrotikConfigAC();
 
@@ -1129,7 +1132,7 @@ const addIpoeDisconnectScheduler = async ({ username, dueDate, macAddress, locat
     }
 };
 
-const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, location }) => {
+const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, location, disconnectRemark = "" }) => {
     if (!username && !oldUsername) return;
 
     const server = await getMikrotikConfigAC();
@@ -1150,6 +1153,7 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
         console.log("PPP UPDATE USERNAME:", targetUsername);
         console.log("PPP UPDATE OLD USERNAME:", oldUsername || "(same)");
         console.log("PPP UPDATE PROFILE:", profile || "(empty)");
+        const nextComment = String(disconnectRemark || "").trim();
 
         const users = await conn
             .menu("/ppp/secret")
@@ -1196,21 +1200,23 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
                         password,
                         profile,
                         service: "pppoe",
-                        comment: ""
+                        comment: nextComment
                     },
                     target.id
                 );
-                try {
-                    await conn.menu("/ppp/secret").update(
-                        { comment: "" },
-                        target.id
-                    );
-                } catch (err) {
-                    if (!isRouterOsEmptyReplyError(err)) {
-                        console.log("PPP comment clear warning:", err?.message);
+                if (!nextComment) {
+                    try {
+                        await conn.menu("/ppp/secret").update(
+                            { comment: "" },
+                            target.id
+                        );
+                    } catch (err) {
+                        if (!isRouterOsEmptyReplyError(err)) {
+                            console.log("PPP comment clear warning:", err?.message);
+                        }
                     }
                 }
-                console.log("PPP COMMENT CLEARED:", username || targetUsername);
+                console.log(nextComment ? "PPP COMMENT UPDATED:" : "PPP COMMENT CLEARED:", username || targetUsername);
                 console.log("PPP user updated:", username || targetUsername);
                 console.log("PPP USER UPDATED:", username || targetUsername);
                 await clearActiveSessions(username || targetUsername);
@@ -1242,32 +1248,34 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
             password,
             profile,
             service: "pppoe",
-            comment: ""
+            comment: nextComment
         });
 
-        try {
-            const refreshedUsers = await conn
-                .menu("/ppp/secret")
-                .where({})
-                .proplist([".id", "name"])
-                .get();
-            const refreshedTarget = refreshedUsers.find(
-                (user) => user.name === (username || targetUsername)
-            );
-
-            if (refreshedTarget?.id) {
-                await conn.menu("/ppp/secret").update(
-                    { comment: "" },
-                    refreshedTarget.id
+        if (!nextComment) {
+            try {
+                const refreshedUsers = await conn
+                    .menu("/ppp/secret")
+                    .where({})
+                    .proplist([".id", "name"])
+                    .get();
+                const refreshedTarget = refreshedUsers.find(
+                    (user) => user.name === (username || targetUsername)
                 );
-            }
-        } catch (err) {
-            if (!isRouterOsEmptyReplyError(err)) {
-                console.log("PPP recreated comment clear warning:", err?.message);
+
+                if (refreshedTarget?.id) {
+                    await conn.menu("/ppp/secret").update(
+                        { comment: "" },
+                        refreshedTarget.id
+                    );
+                }
+            } catch (err) {
+                if (!isRouterOsEmptyReplyError(err)) {
+                    console.log("PPP recreated comment clear warning:", err?.message);
+                }
             }
         }
 
-        console.log("PPP COMMENT CLEARED AFTER RECREATE:", username || targetUsername);
+        console.log(nextComment ? "PPP COMMENT UPDATED AFTER RECREATE:" : "PPP COMMENT CLEARED AFTER RECREATE:", username || targetUsername);
         console.log("PPP user updated:", username || targetUsername);
         console.log("PPP USER RECREATED:", username || targetUsername);
         await clearActiveSessions(username || targetUsername);

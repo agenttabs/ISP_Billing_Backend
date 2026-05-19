@@ -68,6 +68,13 @@ router.get(
 );
 
 router.get(
+  "/reports/pull-out",
+  protect,
+  authorize("ADMIN"),
+  controller.getPullOutReport
+);
+
+router.get(
   "/payments/next-receipt-number",
   protect,
   authorize("ADMIN", "CASHIER"),

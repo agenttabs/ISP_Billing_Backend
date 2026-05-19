@@ -1,10 +1,11 @@
 const mongoose = require("mongoose");
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
+const { DEFAULT_COMPANY_NAME } = require("../services/system-settings.service");
 
 const defaultPrintReceiptConfig = () => ({
   Name: "Default Thermal Receipt",
-  CompanyName: "DNS NETWORKS",
+  CompanyName: DEFAULT_COMPANY_NAME,
   ReceiptTitle: "Official Payment Receipt",
   ReceiptSubtitle: "",
   FooterNote: "Thank you for your payment.",

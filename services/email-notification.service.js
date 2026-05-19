@@ -4,17 +4,18 @@ const { jsPDF } = require("jspdf");
 const autoTable = require("jspdf-autotable").default;
 const collections = require("../config/collections");
 const { writeAuditLog } = require("./audit-log.service");
+const { DEFAULT_COMPANY_NAME, getCompanyName } = require("./system-settings.service");
 const MANILA_TIMEZONE = "Asia/Manila";
 
 const defaultEmailNotificationConfig = () => ({
   Name: "Billing SOA Notification",
   DaysOffset: 0,
   SendTime: "08:00",
-  Subject: "DNS NETWORKS Billing Statement - @BillingMonth@",
+  Subject: "@CompanyName@ Billing Statement - @BillingMonth@",
   Body: [
     "Hi @ClientName@,",
     "",
-    "Attached is your DNS NETWORKS billing statement.",
+    "Attached is your @CompanyName@ billing statement.",
     "",
     "Account Number: @AccountNumber@",
     "Monthly Due: @MonthlyDue@",
@@ -29,7 +30,7 @@ const defaultEmailNotificationConfig = () => ({
   SmtpSecure: false,
   SmtpUser: "",
   SmtpPassword: "",
-  FromName: "DNS NETWORKS",
+  FromName: DEFAULT_COMPANY_NAME,
   IsActive: false,
   ManualClientIds: [],
   LastRunKey: "",
@@ -53,7 +54,7 @@ const getGmailDefaults = async () => {
       SmtpPort: Number(document["SMTP PORT"] || 587),
       SmtpUser: String(document.Username || "").trim(),
       SmtpPassword: String(document.Password || ""),
-      FromName: String(document.GMID || "").trim() || "DNS NETWORKS"
+      FromName: String(document.GMID || "").trim() || DEFAULT_COMPANY_NAME
     };
   } catch (_err) {
     return {};
@@ -210,7 +211,7 @@ const getStatementRange = (client) => {
 const getLatestPaymentAmount = (payment) =>
   Number(payment?.TotalAmount || payment?.Cash || 0);
 
-const buildBillingPdfBuffer = (client, history = []) => {
+const buildBillingPdfBuffer = (client, history = [], companyName = DEFAULT_COMPANY_NAME) => {
   const statementRange = getStatementRange(client);
   const statementMonth = statementRange.start
     ? statementRange.start.toLocaleDateString("en-PH", {
@@ -243,7 +244,7 @@ const buildBillingPdfBuffer = (client, history = []) => {
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(20);
-  doc.text("DNS NETWORKS", 18, 14);
+  doc.text(companyName || DEFAULT_COMPANY_NAME, 18, 14);
   doc.setFontSize(12);
   doc.setFont("helvetica", "normal");
   doc.text(statementTitle, 18, 22);
@@ -363,7 +364,7 @@ const getBillingMonthLabel = (client) => {
     : "Billing Statement";
 };
 
-const buildTemplateValues = (client) => {
+const buildTemplateValues = (client, companyName = DEFAULT_COMPANY_NAME) => {
   const statementRange = getStatementRange(client);
   const previousBalance = Math.max(Number(client?.Balance || 0), 0);
   const monthlyDue = Number(client?.AmountDue || 0);
@@ -382,7 +383,8 @@ const buildTemplateValues = (client) => {
     TotalAmountDue: formatCurrency(totalAmountDue),
     DueDate: formatDate(client?.DueDate),
     SubscriptionCover: subscriptionCover,
-    BillingMonth: getBillingMonthLabel(client)
+    BillingMonth: getBillingMonthLabel(client),
+    CompanyName: companyName || DEFAULT_COMPANY_NAME
   };
 };
 
@@ -597,9 +599,10 @@ const sendBillingEmails = async ({ force = false, triggeredBy = "", manualClient
     };
   }
 
+  const companyName = await getCompanyName();
   const transporter = createTransport(config);
   const fromAddress = String(config.SmtpUser || "").trim();
-  const fromName = String(config.FromName || "DNS NETWORKS").trim();
+  const fromName = String(config.FromName || companyName || DEFAULT_COMPANY_NAME).trim();
   let sent = 0;
   let skipped = 0;
   const errors = [];
@@ -607,8 +610,8 @@ const sendBillingEmails = async ({ force = false, triggeredBy = "", manualClient
   for (const client of clients) {
     try {
       const history = await getClientHistory(client);
-      const { buffer, fileName } = buildBillingPdfBuffer(client, history);
-      const values = buildTemplateValues(client);
+      const { buffer, fileName } = buildBillingPdfBuffer(client, history, companyName);
+      const values = buildTemplateValues(client, companyName);
       const subject = renderTemplate(config.Subject, values);
       const body = renderTemplate(config.Body, values);
 

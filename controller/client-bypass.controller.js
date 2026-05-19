@@ -7,6 +7,11 @@ const normalizeAccountName = (value) =>
     .trim()
     .toUpperCase();
 
+const normalizeAccountNumber = (value) =>
+  String(value || "")
+    .replace(/\s+/g, "")
+    .trim();
+
 exports.getClientBypassList = async (_req, res) => {
   try {
     const rows = await mongoose.connection.db
@@ -49,6 +54,11 @@ exports.getClientBypassClients = async (_req, res) => {
         .map((row) => normalizeAccountName(row.AccountNameKey || row.AccountName))
         .filter(Boolean)
     );
+    const bypassAccountNumbers = new Set(
+      (bypassRows || [])
+        .map((row) => normalizeAccountNumber(row.AccountNumberKey || row.AccountNumber))
+        .filter(Boolean)
+    );
     const bypassClientIds = new Set(
       (bypassRows || [])
         .map((row) => String(row.ClientId || "").trim())
@@ -57,11 +67,13 @@ exports.getClientBypassClients = async (_req, res) => {
     const rows = (clients || []).filter((client) => {
       const authMode = String(client.AuthenticationMode || "").trim().toUpperCase();
       const accountKey = normalizeAccountName(client.AccountName);
+      const accountNumber = normalizeAccountNumber(client.AccountNumber);
       const clientId = String(client._id || "").trim();
 
       return (
         ["IPOE", "PPPOE"].includes(authMode) &&
         !(accountKey && bypassAccountKeys.has(accountKey)) &&
+        !(accountNumber && bypassAccountNumbers.has(accountNumber)) &&
         !(clientId && bypassClientIds.has(clientId))
       );
     });
@@ -119,6 +131,8 @@ exports.createClientBypass = async (req, res) => {
       ClientName: client.ClientName || "",
       AccountName: client.AccountName || "",
       AccountNameKey: normalizedClientAccount,
+      AccountNumber: client.AccountNumber || "",
+      AccountNumberKey: normalizeAccountNumber(client.AccountNumber),
       MacAddress: String(client.MacAddress || client.macAddress || "")
         .trim()
         .toUpperCase(),
