@@ -636,16 +636,6 @@ const getRequestActor = (req) => {
 };
 
 const getDashboardTodayEarnings = (earningsRows = [], req) => {
-  const actorType = String(req.user?.type || req.user?.role || "").trim().toUpperCase();
-
-  if (actorType === "CASHIER") {
-    return earningsRows.filter((row) => {
-      const transactionDate = getEarningTransactionDateValue(row);
-      const { start, end } = getTodayRange();
-      return transactionDate >= start && transactionDate <= end;
-    });
-  }
-
   const actorFilter = getDashboardActorFilter(req);
   return earningsRows.filter(actorFilter);
 };
@@ -1987,8 +1977,21 @@ exports.getEarnings = async (req, res) => {
       ClientName: 1,
       AccountName: 1,
       DeclaredBy: 1,
+      DeclaredById: 1,
       CreatedBy: 1,
       CreatedById: 1,
+      DoneBy: 1,
+      DoneById: 1,
+      ReceivedBy: 1,
+      ReceivedById: 1,
+      CollectedBy: 1,
+      CollectedById: 1,
+      Username: 1,
+      UserName: 1,
+      UserId: 1,
+      Cashier: 1,
+      CashierName: 1,
+      CashierId: 1,
       Cash: 1,
       TotalAmount: 1,
       MOP: 1,
@@ -2131,6 +2134,9 @@ exports.getEarnings = async (req, res) => {
     };
 
     let filteredEarnings = earnings.map(enrichEarningVerification);
+    if (userType === "CASHIER") {
+      filteredEarnings = filteredEarnings.filter(getDashboardActorFilter(req));
+    }
 
     filteredEarnings.sort((a, b) => {
       const dateA = getEarningTransactionDateValue(a);
