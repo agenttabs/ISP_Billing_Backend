@@ -12,7 +12,11 @@ const sanitizeBatchProgram = (program) => ({
   DaysOffset: Number(program.DaysOffset || 0),
   SendTime: String(program.SendTime || "").trim(),
   Body: String(program.Body || ""),
-  IsActive: Boolean(program.IsActive)
+  IsActive: Boolean(program.IsActive),
+  LastRunKey: String(program.LastRunKey || "").trim(),
+  LastRunAt: program.LastRunAt || null,
+  LastRunSummary: String(program.LastRunSummary || "").trim(),
+  LastError: String(program.LastError || "").trim()
 });
 
 const getManilaDateParts = (date = new Date()) => {
@@ -36,7 +40,10 @@ const getManilaDateParts = (date = new Date()) => {
   return {
     year: Number(valueByType.year || 0),
     month: Number(valueByType.month || 0),
-    day: Number(valueByType.day || 0)
+    day: Number(valueByType.day || 0),
+    hour: Number(valueByType.hour || 0),
+    minute: Number(valueByType.minute || 0),
+    second: Number(valueByType.second || 0)
   };
 };
 
@@ -49,6 +56,23 @@ const addDays = (value, days) => {
   const next = new Date(value);
   next.setDate(next.getDate() + Number(days || 0));
   return next;
+};
+
+const getMinutesFromTimeKey = (value) => {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+
+  return hour * 60 + minute;
 };
 
 const hasContactNumber = (client) => Boolean(String(
@@ -187,6 +211,93 @@ const getProgramRecipients = async (program) => {
   });
 };
 
+const updateProgramRunSummary = async (programId, values = {}) => {
+  await mongoose.connection.db
+    .collection(collections.smsBatchProgram)
+    .updateOne(
+      { _id: programId },
+      {
+        $set: {
+          ...values,
+          updatedAt: new Date()
+        }
+      }
+    );
+};
+
+const executeSmsBatchProgram = async ({ program, action, req = null }) => {
+  const recipients = await getProgramRecipients(program);
+  let sent = 0;
+  let skipped = 0;
+  const errors = [];
+
+  for (const client of recipients) {
+    try {
+      const message = replaceSmsTokens(String(program.Body || ""), buildTemplateValues(client));
+      const result = await sendDirectSms({
+        recipient: client?.ContactNumber || client?.Mobile || client?.Phone || "",
+        message
+      });
+
+      if (result?.sent) {
+        sent += 1;
+      } else {
+        skipped += 1;
+        errors.push(
+          `${client?.AccountName || client?.ClientName || "Client"}: ${result?.reason || "SMS skipped."}`
+        );
+      }
+    } catch (err) {
+      skipped += 1;
+      errors.push(
+        `${client?.AccountName || client?.ClientName || "Client"}: ${err.message}`
+      );
+    }
+  }
+
+  const now = new Date();
+  const summary = `Sent ${sent} SMS, skipped ${skipped} SMS.`;
+  const status = skipped > 0 && sent === 0 ? "FAILED" : "SUCCESS";
+
+  await updateProgramRunSummary(program._id, {
+    LastRunKey: getManilaDateKey(now),
+    LastRunAt: now,
+    LastRunSummary: summary,
+    LastError: errors.length ? errors.slice(0, 5).join(" | ") : ""
+  });
+
+  await writeAuditLog({
+    req,
+    actor: req
+      ? null
+      : {
+          name: "Scheduler",
+          username: "scheduler",
+          loginAccount: "scheduler",
+          type: "SCHEDULER"
+        },
+    module: "SMS_BATCH",
+    action,
+    targetType: "SMS_BATCH_PROGRAM",
+    targetId: program._id,
+    status,
+    summary: `SMS batch program ${action === "RUN_SCHEDULED" ? "scheduled run" : "run now"} executed. ${summary}`,
+    details: {
+      program: sanitizeBatchProgram(program),
+      totalRecipients: recipients.length,
+      errors
+    }
+  });
+
+  return {
+    sent,
+    skipped,
+    totalRecipients: recipients.length,
+    reason: summary,
+    errors
+  };
+};
+
 exports.getSmsBatchPrograms = async (_req, res) => {
   try {
     const programs = await mongoose.connection.db
@@ -238,6 +349,10 @@ exports.createSmsBatchProgram = async (req, res) => {
       SendTime,
       Body,
       IsActive,
+      LastRunKey: "",
+      LastRunAt: null,
+      LastRunSummary: "",
+      LastError: "",
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -388,60 +503,87 @@ exports.runSmsBatchProgramNow = async (req, res) => {
       return res.status(404).json({ error: "Batch program not found." });
     }
 
-    const recipients = await getProgramRecipients(program);
-    let sent = 0;
-    let skipped = 0;
-    const errors = [];
-
-    for (const client of recipients) {
-      try {
-        const message = replaceSmsTokens(String(program.Body || ""), buildTemplateValues(client));
-        const result = await sendDirectSms({
-          recipient: client?.ContactNumber || client?.Mobile || client?.Phone || "",
-          message
-        });
-
-        if (result?.sent) {
-          sent += 1;
-        } else {
-          skipped += 1;
-          errors.push(
-            `${client?.AccountName || client?.ClientName || "Client"}: ${result?.reason || "SMS skipped."}`
-          );
-        }
-      } catch (err) {
-        skipped += 1;
-        errors.push(
-          `${client?.AccountName || client?.ClientName || "Client"}: ${err.message}`
-        );
-      }
-    }
-
-    const summary = `Sent ${sent} SMS, skipped ${skipped} SMS.`;
-
-    res.json({
-      sent,
-      skipped,
-      totalRecipients: recipients.length,
-      reason: summary,
-      errors
+    const result = await executeSmsBatchProgram({
+      program,
+      action: "RUN_NOW",
+      req
     });
 
-    await writeAuditLog({
-      req,
-      module: "SMS_BATCH",
-      action: "RUN_NOW",
-      targetType: "SMS_BATCH_PROGRAM",
-      targetId: id,
-      status: skipped > 0 && sent === 0 ? "FAILED" : "SUCCESS",
-      summary: `SMS batch program run now executed. ${summary}`,
-      details: {
-        program: sanitizeBatchProgram(program),
-        totalRecipients: recipients.length,
-        errors
-      }
+    res.json({
+      sent: result.sent,
+      skipped: result.skipped,
+      totalRecipients: result.totalRecipients,
+      reason: result.reason,
+      errors: result.errors
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
+
+let schedulerHandle = null;
+let schedulerBusy = false;
+
+const runScheduledSmsBatchPrograms = async () => {
+  if (schedulerBusy) {
+    return;
+  }
+
+  schedulerBusy = true;
+
+  try {
+    const now = new Date();
+    const parts = getManilaDateParts(now);
+    const currentMinutes = parts.hour * 60 + parts.minute;
+    const todayKey = getManilaDateKey(now);
+    const programs = await mongoose.connection.db
+      .collection(collections.smsBatchProgram)
+      .find({ IsActive: true })
+      .toArray();
+
+    for (const program of programs) {
+      const targetMinutes = getMinutesFromTimeKey(program.SendTime);
+
+      if (targetMinutes === null) {
+        continue;
+      }
+
+      if (currentMinutes < targetMinutes || String(program.LastRunKey || "") === todayKey) {
+        continue;
+      }
+
+      console.log(`SMS BATCH SCHEDULER RUNNING: ${program.Name || program._id}`);
+
+      try {
+        await executeSmsBatchProgram({
+          program,
+          action: "RUN_SCHEDULED"
+        });
+      } catch (err) {
+        console.error("SMS BATCH PROGRAM ERROR:", err.message);
+        await updateProgramRunSummary(program._id, {
+          LastRunKey: todayKey,
+          LastRunAt: new Date(),
+          LastRunSummary: "Scheduled SMS batch failed.",
+          LastError: err.message
+        });
+      }
+    }
+  } catch (err) {
+    console.error("SMS BATCH SCHEDULER ERROR:", err.message);
+  } finally {
+    schedulerBusy = false;
+  }
+};
+
+const startSmsBatchScheduler = () => {
+  if (schedulerHandle) {
+    return;
+  }
+
+  schedulerHandle = setInterval(runScheduledSmsBatchPrograms, 60 * 1000);
+  setTimeout(runScheduledSmsBatchPrograms, 10000);
+  console.log("SMS BATCH SCHEDULER STARTED");
+};
+
+exports.startSmsBatchScheduler = startSmsBatchScheduler;

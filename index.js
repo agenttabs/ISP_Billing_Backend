@@ -24,6 +24,7 @@ const mikrotikDcBatchRoutes = require("./Routes/mikrotik-dc-batch.routes");
 const mikrotikDueDisconnectBatchRoutes = require("./Routes/mikrotik-due-disconnect-batch.routes");
 const { errorHandler } = require("./middleware/error.middleware");
 const { startEmailNotificationScheduler } = require("./services/email-notification.service");
+const { startSmsBatchScheduler } = require("./controller/sms-batch.controller");
 const { startMikrotikCheckerScheduler } = require("./services/mikrotik-checker.service");
 const { startMikrotikDcBatchScheduler } = require("./services/mikrotik-dc-batch.service");
 const {
@@ -86,6 +87,7 @@ const startServer = async () => {
   await connectDB();
 
   startEmailNotificationScheduler();
+  startSmsBatchScheduler();
   startMikrotikCheckerScheduler();
   startMikrotikDcBatchScheduler();
   startMikrotikDueDisconnectBatchScheduler();
