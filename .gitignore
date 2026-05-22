@@ -1,0 +1,5 @@
+node_modules/
+.env
+.env.*
+certs/qz-private-key.pem
+npm-debug.log*
