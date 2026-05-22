@@ -1239,28 +1239,18 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
 
         if (target?.id) {
             try {
+                const pppSecretUpdatePayload = {
+                    name: username || targetUsername,
+                    password,
+                    profile,
+                    service: "pppoe",
+                    comment: nextComment
+                };
+
                 await conn.menu("/ppp/secret").update(
-                    {
-                        name: username || targetUsername,
-                        password,
-                        profile,
-                        service: "pppoe",
-                        comment: nextComment
-                    },
+                    pppSecretUpdatePayload,
                     target.id
                 );
-                if (!nextComment) {
-                    try {
-                        await conn.menu("/ppp/secret").update(
-                            { comment: "" },
-                            target.id
-                        );
-                    } catch (err) {
-                        if (!isRouterOsEmptyReplyError(err)) {
-                            console.log("PPP comment clear warning:", err?.message);
-                        }
-                    }
-                }
                 console.log(nextComment ? "PPP COMMENT UPDATED:" : "PPP COMMENT CLEARED:", username || targetUsername);
                 console.log("PPP user updated:", username || targetUsername);
                 console.log("PPP USER UPDATED:", username || targetUsername);
@@ -1288,37 +1278,15 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
             await clearActiveSessions(targetUsername);
         }
 
-        await conn.menu("/ppp/secret").add({
+        const pppSecretCreatePayload = {
             name: username || targetUsername,
             password,
             profile,
             service: "pppoe",
             comment: nextComment
-        });
+        };
 
-        if (!nextComment) {
-            try {
-                const refreshedUsers = await conn
-                    .menu("/ppp/secret")
-                    .where({})
-                    .proplist([".id", "name"])
-                    .get();
-                const refreshedTarget = refreshedUsers.find(
-                    (user) => user.name === (username || targetUsername)
-                );
-
-                if (refreshedTarget?.id) {
-                    await conn.menu("/ppp/secret").update(
-                        { comment: "" },
-                        refreshedTarget.id
-                    );
-                }
-            } catch (err) {
-                if (!isRouterOsEmptyReplyError(err)) {
-                    console.log("PPP recreated comment clear warning:", err?.message);
-                }
-            }
-        }
+        await conn.menu("/ppp/secret").add(pppSecretCreatePayload);
 
         console.log(nextComment ? "PPP COMMENT UPDATED AFTER RECREATE:" : "PPP COMMENT CLEARED AFTER RECREATE:", username || targetUsername);
         console.log("PPP user updated:", username || targetUsername);

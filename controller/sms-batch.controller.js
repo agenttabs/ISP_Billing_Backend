@@ -13,6 +13,7 @@ const sanitizeBatchProgram = (program) => ({
   SendTime: String(program.SendTime || "").trim(),
   Body: String(program.Body || ""),
   IsActive: Boolean(program.IsActive),
+  RecipientCount: Number(program.RecipientCount || 0),
   LastRunKey: String(program.LastRunKey || "").trim(),
   LastRunAt: program.LastRunAt || null,
   LastRunSummary: String(program.LastRunSummary || "").trim(),
@@ -56,6 +57,14 @@ const addDays = (value, days) => {
   const next = new Date(value);
   next.setDate(next.getDate() + Number(days || 0));
   return next;
+};
+
+const getManilaDayUtcRange = (date = new Date()) => {
+  const parts = getManilaDateParts(date);
+  const start = new Date(Date.UTC(parts.year, parts.month - 1, parts.day - 1, 16, 0, 0, 0));
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
 };
 
 const getMinutesFromTimeKey = (value) => {
@@ -187,12 +196,7 @@ const buildTemplateValues = (client) => {
   };
 };
 
-const getProgramRecipients = async (program) => {
-  const clients = await mongoose.connection.db
-    .collection(collections.clients)
-    .find({})
-    .toArray();
-
+const filterProgramRecipients = (program, clients = []) => {
   const todayKey = getManilaDateKey();
   const daysOffset = Number(program?.DaysOffset || 0);
 
@@ -209,6 +213,61 @@ const getProgramRecipients = async (program) => {
     const scheduledDate = addDays(dueDate, daysOffset);
     return getManilaDateKey(scheduledDate) === todayKey;
   });
+};
+
+const getProgramRecipients = async (program) => {
+  const daysOffset = Number(program?.DaysOffset || 0);
+  const targetDueDate = addDays(new Date(), -daysOffset);
+  const { start, end } = getManilaDayUtcRange(targetDueDate);
+  const clients = await mongoose.connection.db
+    .collection(collections.clients)
+    .find(
+      {
+        DueDate: { $gte: start, $lt: end },
+        $or: [
+          { ContactNumber: { $exists: true, $nin: ["", null] } },
+          { Mobile: { $exists: true, $nin: ["", null] } },
+          { Phone: { $exists: true, $nin: ["", null] } }
+        ],
+        $and: [
+          {
+            $or: [
+              { PaymentStatus: { $exists: false } },
+              { PaymentStatus: { $not: /^PAID$/i } },
+              { AmountDue: { $gt: 0 } },
+              { amountDue: { $gt: 0 } }
+            ]
+          }
+        ],
+        $nor: [
+          { Profile: /DISCONNECTION|DISCONNECTED|^DC-PUTOL$|^0M\/0M$/i },
+          { NetPlan: /DISCONNECTION|DISCONNECTED|^DC-PUTOL$|^0M\/0M$/i },
+          { Status: /DISCONNECTION|DISCONNECTED|^DC-PUTOL$|^0M\/0M$/i }
+        ]
+      },
+      {
+        projection: {
+          ClientName: 1,
+          AccountName: 1,
+          AccountNumber: 1,
+          ContactNumber: 1,
+          Mobile: 1,
+          Phone: 1,
+          DueDate: 1,
+          AmountDue: 1,
+          amountDue: 1,
+          Balance: 1,
+          PaymentStatus: 1,
+          NetPlan: 1,
+          Profile: 1,
+          Status: 1,
+          SubscriptionCover: 1
+        }
+      }
+    )
+    .toArray();
+
+  return filterProgramRecipients(program, clients);
 };
 
 const updateProgramRunSummary = async (programId, values = {}) => {
