@@ -112,11 +112,23 @@ const buildExpensePayload = (body, req) => {
     Invoice: String(body?.Invoice || "").trim(),
     LogDate: isCashier ? getTodayLogDate() : formatLogDate(body?.LogDate),
     Docs: String(body?.Docs || "").trim(),
-    InCharge: actorDisplay,
-    InChargeId: actor.id,
+    TechnicianId: String(body?.TechnicianId || body?.technicianId || "").trim(),
+    TechnicianName: String(body?.TechnicianName || body?.technicianName || "").trim(),
     CreatedBy: actorDisplay,
     CreatedById: actor.id
   };
+};
+
+const validateExpensePayload = (payload) => {
+  if (String(payload.Type || "").trim().toUpperCase() !== "CASH ADVANCE") {
+    return "";
+  }
+
+  if (!payload.TechnicianId || !payload.TechnicianName) {
+    return "Cash Advance expenses require a selected technician.";
+  }
+
+  return "";
 };
 
 exports.getExpenses = async (req, res) => {
@@ -140,6 +152,11 @@ exports.createExpense = async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     };
+    const validationError = validateExpensePayload(payload);
+
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
 
     const result = await mongoose.connection.db
       .collection(collections.expense)
@@ -196,10 +213,24 @@ exports.updateExpense = async (req, res) => {
       ...buildExpensePayload(req.body, req),
       updatedAt: new Date()
     };
+    const validationError = validateExpensePayload(payload);
+
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
 
     await mongoose.connection.db
       .collection(collections.expense)
-      .updateOne({ _id: new ObjectId(id) }, { $set: payload });
+      .updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: payload,
+          $unset: {
+            InCharge: "",
+            InChargeId: ""
+          }
+        }
+      );
 
     res.json({
       _id: id,

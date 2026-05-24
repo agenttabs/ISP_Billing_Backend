@@ -623,6 +623,7 @@ exports.createRepairRequest = async (req, res) => {
     const repairText = String(
       req.body.repairText || req.body.message || req.body.notes || ""
     ).trim();
+    const smsMessageOverride = String(req.body.smsMessage || "").trim();
     const repairTemplate = await getSmsTemplateByType("smsRepairTech");
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -633,7 +634,7 @@ exports.createRepairRequest = async (req, res) => {
       return res.status(400).json({ error: "Technician is required." });
     }
 
-    if (!repairText && !repairTemplate?.Body) {
+    if (!repairText && !smsMessageOverride && !repairTemplate?.Body) {
       return res.status(400).json({ error: "Repair details are required." });
     }
 
@@ -678,10 +679,11 @@ exports.createRepairRequest = async (req, res) => {
       technicianUsername: String(technician.Username || "").trim(),
       technicianContact,
       repairText,
+      smsMessage: smsMessageOverride,
       createdAt: new Date()
     };
 
-    const smsMessage = repairTemplate?.Body
+    const smsMessage = smsMessageOverride || (repairTemplate?.Body
       ? replaceSmsTokens(repairTemplate.Body, {
           TechnicianName: repairRequest.technicianName || "",
           ClientName: repairRequest.clientName || repairRequest.accountName || "",
@@ -700,7 +702,7 @@ exports.createRepairRequest = async (req, res) => {
           `Contact: ${repairRequest.contactNumber || "-"}`,
           `Address: ${repairRequest.address || "-"}`,
           `Issue: ${repairRequest.repairText}`
-        ].join("\n");
+        ].join("\n"));
 
     let smsResult;
     try {

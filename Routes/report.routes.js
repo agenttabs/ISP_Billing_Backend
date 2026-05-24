@@ -68,6 +68,13 @@ router.get(
 );
 
 router.get(
+  "/reports/technician-payroll",
+  protect,
+  authorize("ADMIN"),
+  controller.getTechnicianPayrollReport
+);
+
+router.get(
   "/reports/pull-out",
   protect,
   authorize("ADMIN"),

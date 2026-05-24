@@ -30,6 +30,11 @@ const normalizeScheduleDays = (value) => {
     .filter((day) => WEEK_DAYS.includes(day));
 };
 
+const normalizePayrollSchedule = (value) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  return ["15_END", "7_15_22_END"].includes(normalized) ? normalized : "15_END";
+};
+
 const getScheduleDaysFromBody = (body, fallback) =>
   normalizeScheduleDays(
     body.scheduleDays ??
@@ -66,6 +71,7 @@ const sanitizeCredentialUser = (user) => ({
   Email: user.Email || "",
   FB: user.FB || "",
   Salary: user.Salary || "",
+  PayrollSchedule: normalizePayrollSchedule(user.PayrollSchedule),
   ScheduleDays: normalizeScheduleDays(user.ScheduleDays),
   TelegramChatID: user.TelegramChatID || "",
   TelegramToken: user.TelegramToken || ""
@@ -380,6 +386,7 @@ exports.createUser = async (req, res) => {
       Password: password,
       Restriction: String(req.body.restriction || "Default").trim(),
       Salary: String(req.body.salary || "").trim(),
+      PayrollSchedule: normalizePayrollSchedule(req.body.payrollSchedule),
       ScheduleDays: getScheduleDaysFromBody(
         req.body,
         type === "CASHIER" ? WEEK_DAYS : []
@@ -463,6 +470,9 @@ exports.updateUser = async (req, res) => {
         req.body.restriction ?? existingUser.Restriction ?? "Default"
       ).trim(),
       Salary: String(req.body.salary ?? existingUser.Salary ?? "").trim(),
+      PayrollSchedule: normalizePayrollSchedule(
+        req.body.payrollSchedule ?? existingUser.PayrollSchedule
+      ),
       ScheduleDays: getScheduleDaysFromBody(req.body, existingUser.ScheduleDays),
       Status: status === "DEACTIVE" ? "DEACTIVE" : "ACTIVE",
       Type: type,

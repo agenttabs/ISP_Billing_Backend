@@ -40,6 +40,235 @@ const getExpenseTransactionDateValue = (row) =>
 const parseMoneyValue = (value) =>
   Number(String(value || 0).replace(/,/g, "")) || 0;
 
+const normalizePayrollSchedule = (value) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  return ["15_END", "7_15_22_END"].includes(normalized) ? normalized : "15_END";
+};
+
+const getPayrollScheduleLabel = (value) =>
+  normalizePayrollSchedule(value) === "7_15_22_END"
+    ? "7, 15, 22 and End of Month"
+    : "15 and End of Month";
+
+const getPayrollCutoffDays = (value) =>
+  normalizePayrollSchedule(value) === "7_15_22_END" ? [7, 15, 22, "END"] : [15, "END"];
+
+const isEndOfMonthDate = (date) => {
+  const nextDay = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+  return nextDay.getDate() === 1;
+};
+
+const getPayrollCutoffKey = (date) =>
+  isEndOfMonthDate(date) ? "END" : date.getDate();
+
+const getPreviousPayrollCutoffDate = (date, schedule) => {
+  const cutoffs = getPayrollCutoffDays(schedule);
+  const candidates = [];
+
+  for (let offset = 0; offset <= 1; offset += 1) {
+    const monthDate = new Date(date.getFullYear(), date.getMonth() - offset, 1);
+    const year = monthDate.getFullYear();
+    const month = monthDate.getMonth();
+    const lastDay = new Date(year, month + 1, 0).getDate();
+
+    cutoffs.forEach((cutoff) => {
+      const day = cutoff === "END" ? lastDay : cutoff;
+      const candidate = new Date(year, month, day, 23, 59, 59, 999);
+      if (candidate < date) {
+        candidates.push(candidate);
+      }
+    });
+  }
+
+  return candidates.sort((a, b) => b - a)[0] || null;
+};
+
+const getPayrollDateRange = (cutoffDate, schedule) => {
+  const previousCutoff = getPreviousPayrollCutoffDate(cutoffDate, schedule);
+  const start = previousCutoff
+    ? new Date(previousCutoff.getFullYear(), previousCutoff.getMonth(), previousCutoff.getDate() + 1, 0, 0, 0, 0)
+    : new Date(cutoffDate.getFullYear(), cutoffDate.getMonth(), 1, 0, 0, 0, 0);
+  const end = new Date(cutoffDate.getFullYear(), cutoffDate.getMonth(), cutoffDate.getDate(), 23, 59, 59, 999);
+
+  return { start, end, previousCutoff };
+};
+
+const getPayrollCutoffDate = (year, month, cutoff) => {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const day = cutoff === "END" ? lastDay : cutoff;
+  return new Date(year, month, day, 23, 59, 59, 999);
+};
+
+const getPayrollCutoffDatesBetween = (startDate, endDate, schedule) => {
+  const cutoffDays = getPayrollCutoffDays(schedule);
+  const dates = [];
+  const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  const endMonth = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+
+  while (cursor <= endMonth) {
+    cutoffDays.forEach((cutoff) => {
+      const cutoffDate = getPayrollCutoffDate(
+        cursor.getFullYear(),
+        cursor.getMonth(),
+        cutoff
+      );
+
+      if (cutoffDate >= startDate && cutoffDate <= endDate) {
+        dates.push(cutoffDate);
+      }
+    });
+
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  return dates.sort((a, b) => a - b);
+};
+
+const isTechnicianCashAdvanceExpense = (expense) => {
+  return String(expense?.Type || "").trim().toUpperCase() === "CASH ADVANCE";
+};
+
+const buildTechnicianMatchTokens = (technician) =>
+  [
+    technician?.ID,
+    technician?.Username,
+    technician?.Name,
+    technician?.Contact
+  ]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+
+const isExpenseForTechnician = (expense, technician) => {
+  const directTechnicianId = String(expense?.TechnicianId || expense?.technicianId || "").trim();
+  const directTechnicianName = String(expense?.TechnicianName || expense?.technicianName || "").trim().toLowerCase();
+  const technicianId = String(technician?.ID || "").trim();
+  const technicianName = String(technician?.Name || "").trim().toLowerCase();
+
+  if (directTechnicianId && technicianId && directTechnicianId === technicianId) {
+    return true;
+  }
+
+  if (directTechnicianName && technicianName && directTechnicianName === technicianName) {
+    return true;
+  }
+
+  const tokens = buildTechnicianMatchTokens(technician);
+  if (!tokens.length) {
+    return false;
+  }
+
+  const haystack = [
+    expense?.Name,
+    expense?.Type,
+    expense?.Docs,
+    expense?.Invoice,
+    expense?.InCharge,
+    expense?.InChargeId,
+    expense?.CreatedBy,
+    expense?.CreatedById
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return tokens.some((token) => haystack.includes(token));
+};
+
+const sumCashAdvanceAmounts = (expenses = []) =>
+  expenses.reduce((sum, expense) => sum + parseMoneyValue(expense.Amount), 0);
+
+const mapCashAdvanceExpense = (expense) => ({
+  _id: String(expense._id || ""),
+  date: getExpenseTransactionDateValue(expense),
+  name: expense.Name || "-",
+  invoice: expense.Invoice || "-",
+  type: expense.Type || "-",
+  amount: parseMoneyValue(expense.Amount),
+  docs: expense.Docs || "-"
+});
+
+const getTechnicianCashAdvancePayroll = ({
+  expenses,
+  technician,
+  cutoffDate,
+  payrollSchedule,
+  grossSalary
+}) => {
+  const selectedRange = getPayrollDateRange(cutoffDate, payrollSchedule);
+  const selectedEnd = selectedRange.end;
+  const relevantExpenses = expenses
+    .filter((expense) => {
+      if (!isTechnicianCashAdvanceExpense(expense) || !isExpenseForTechnician(expense, technician)) {
+        return false;
+      }
+
+      return getExpenseTransactionDateValue(expense) <= selectedEnd;
+    })
+    .sort((a, b) => getExpenseTransactionDateValue(a) - getExpenseTransactionDateValue(b));
+
+  if (!relevantExpenses.length) {
+    return {
+      cashAdvances: [],
+      periodCashAdvanceTotal: 0,
+      cashAdvanceTotal: 0,
+      cashAdvanceCarryOver: 0
+    };
+  }
+
+  const firstExpenseDate = getExpenseTransactionDateValue(relevantExpenses[0]);
+  const historyStart = new Date(
+    firstExpenseDate.getFullYear(),
+    firstExpenseDate.getMonth(),
+    1,
+    0,
+    0,
+    0,
+    0
+  );
+  const cutoffDates = getPayrollCutoffDatesBetween(
+    historyStart,
+    selectedEnd,
+    payrollSchedule
+  );
+  let outstandingAdvance = 0;
+  let selectedCashAdvances = [];
+  let selectedPeriodCashAdvanceTotal = 0;
+  let selectedDeduction = 0;
+  let selectedCarryOver = 0;
+
+  cutoffDates.forEach((currentCutoffDate) => {
+    const { start, end } = getPayrollDateRange(currentCutoffDate, payrollSchedule);
+    const periodExpenses = relevantExpenses.filter((expense) => {
+      const expenseDate = getExpenseTransactionDateValue(expense);
+      return expenseDate >= start && expenseDate <= end;
+    });
+    const periodTotal = sumCashAdvanceAmounts(periodExpenses);
+
+    outstandingAdvance += periodTotal;
+
+    const isSelectedCutoff =
+      currentCutoffDate.getFullYear() === selectedEnd.getFullYear() &&
+      currentCutoffDate.getMonth() === selectedEnd.getMonth() &&
+      currentCutoffDate.getDate() === selectedEnd.getDate();
+    const deduction = Math.min(grossSalary, outstandingAdvance);
+
+    if (isSelectedCutoff) {
+      selectedCashAdvances = periodExpenses.map(mapCashAdvanceExpense);
+      selectedPeriodCashAdvanceTotal = periodTotal;
+      selectedDeduction = deduction;
+      selectedCarryOver = Math.max(0, outstandingAdvance - deduction);
+    }
+
+    outstandingAdvance = Math.max(0, outstandingAdvance - deduction);
+  });
+
+  return {
+    cashAdvances: selectedCashAdvances,
+    periodCashAdvanceTotal: selectedPeriodCashAdvanceTotal,
+    cashAdvanceTotal: selectedDeduction,
+    cashAdvanceCarryOver: selectedCarryOver
+  };
+};
+
 const normalizeActorToken = (value) =>
   String(value || "")
     .trim()
@@ -2406,6 +2635,108 @@ exports.getTechReport = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getTechnicianPayrollReport = async (req, res) => {
+  try {
+    const cutoffDate = req.query.cutoffDate
+      ? new Date(`${req.query.cutoffDate}T00:00:00`)
+      : new Date();
+
+    if (Number.isNaN(cutoffDate.getTime())) {
+      return res.status(400).json({ error: "Invalid cutoff date." });
+    }
+
+    const cutoffKey = getPayrollCutoffKey(cutoffDate);
+    const db = mongoose.connection.db;
+    const credentialsCollection = db.collection(collections.credentials);
+    const expenseCollection = db.collection(collections.expense);
+    const technicians = (await credentialsCollection.find({}).toArray()).filter((user) =>
+      ["TECHNICIAN", "EMPLOYEE"].includes(String(user.Type || "").trim().toUpperCase())
+    );
+    const expenses = await expenseCollection.find({}).toArray();
+
+    const rows = technicians
+      .map((technician) => {
+        const payrollSchedule = normalizePayrollSchedule(technician.PayrollSchedule);
+        const cutoffDays = getPayrollCutoffDays(payrollSchedule);
+        const isIncluded = cutoffDays.includes(cutoffKey);
+        const { start, end, previousCutoff } = getPayrollDateRange(cutoffDate, payrollSchedule);
+        const monthlySalary = parseMoneyValue(technician.Salary);
+        const grossSalary = isIncluded ? monthlySalary / cutoffDays.length : 0;
+        const cashAdvancePayroll = isIncluded
+          ? getTechnicianCashAdvancePayroll({
+              expenses,
+              technician,
+              cutoffDate,
+              payrollSchedule,
+              grossSalary
+            })
+          : {
+              cashAdvances: [],
+              periodCashAdvanceTotal: 0,
+              cashAdvanceTotal: 0,
+              cashAdvanceCarryOver: 0
+            };
+
+        return {
+          technicianId: String(technician.ID || ""),
+          name: technician.Name || "-",
+          username: technician.Username || "-",
+          contact: technician.Contact || "-",
+          monthlySalary,
+          payrollSchedule,
+          payrollScheduleLabel: getPayrollScheduleLabel(payrollSchedule),
+          cutoffCount: cutoffDays.length,
+          cutoffDate,
+          cutoffStartDate: start,
+          previousCutoffDate: previousCutoff,
+          isIncluded,
+          grossSalary,
+          periodCashAdvanceTotal: cashAdvancePayroll.periodCashAdvanceTotal,
+          cashAdvanceTotal: cashAdvancePayroll.cashAdvanceTotal,
+          cashAdvanceCarryOver: cashAdvancePayroll.cashAdvanceCarryOver,
+          netSalary: Math.max(0, grossSalary - cashAdvancePayroll.cashAdvanceTotal),
+          cashAdvances: cashAdvancePayroll.cashAdvances
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const includedRows = rows.filter((row) => row.isIncluded);
+    const summary = {
+      cutoffDate,
+      cutoffKey,
+      technicianCount: includedRows.length,
+      grossSalaryTotal: includedRows.reduce((sum, row) => sum + Number(row.grossSalary || 0), 0),
+      cashAdvanceTotal: includedRows.reduce((sum, row) => sum + Number(row.cashAdvanceTotal || 0), 0),
+      cashAdvanceCarryOverTotal: includedRows.reduce(
+        (sum, row) => sum + Number(row.cashAdvanceCarryOver || 0),
+        0
+      ),
+      netSalaryTotal: includedRows.reduce((sum, row) => sum + Number(row.netSalary || 0), 0)
+    };
+
+    await writeAuditLog({
+      req,
+      module: "REPORT",
+      action: "GET_TECHNICIAN_PAYROLL",
+      targetType: "PAYROLL",
+      status: "SUCCESS",
+      summary: "Technician payroll report generated.",
+      details: {
+        cutoffDate: req.query.cutoffDate || "",
+        technicianCount: summary.technicianCount,
+        grossSalaryTotal: summary.grossSalaryTotal,
+        cashAdvanceTotal: summary.cashAdvanceTotal,
+        cashAdvanceCarryOverTotal: summary.cashAdvanceCarryOverTotal,
+        netSalaryTotal: summary.netSalaryTotal
+      }
+    });
+
+    return res.json({ summary, rows });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 };
 
