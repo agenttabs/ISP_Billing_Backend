@@ -8,7 +8,7 @@ const router = express.Router();
 router.get(
   "/print-receipt",
   protect,
-  authorize("ADMIN"),
+  authorize("ADMIN", "CASHIER"),
   controller.getPrintReceiptConfig
 );
 
