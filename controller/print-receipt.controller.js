@@ -6,7 +6,7 @@ const { DEFAULT_COMPANY_NAME } = require("../services/system-settings.service");
 const defaultPrintReceiptConfig = () => ({
   Name: "Default Thermal Receipt",
   CompanyName: DEFAULT_COMPANY_NAME,
-  ReceiptTitle: "Official Payment Receipt",
+  ReceiptTitle: "Acknowledgement Receipt",
   ReceiptSubtitle: "",
   FooterNote: "Thank you for your payment.",
   PreferredPrinterName: "",
