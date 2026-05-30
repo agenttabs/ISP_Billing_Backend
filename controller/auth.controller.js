@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
 const JWT_SECRET = process.env.JWT_SECRET_KEY || "ISP_BILLING_SECRET_KEY";
@@ -190,8 +191,19 @@ exports.login = async (req, res) => {
       restriction: user.Restriction || "",
       email: user.Email || "",
       contact: user.Contact || "",
-      scheduleDays: normalizeScheduleDays(user.ScheduleDays)
+      scheduleDays: normalizeScheduleDays(user.ScheduleDays),
+      sessionId: crypto.randomUUID()
     };
+
+    await getCredentialCollection().updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          ActiveSessionId: userPayload.sessionId,
+          ActiveSessionAt: new Date()
+        }
+      }
+    );
 
     const token = jwt.sign(userPayload, JWT_SECRET, { expiresIn: "1d" });
 

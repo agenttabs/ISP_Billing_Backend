@@ -3,13 +3,18 @@ const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
 const { DEFAULT_COMPANY_NAME } = require("../services/system-settings.service");
 
+const DEFAULT_FOOTER_NOTE = "Please keep this receipt as proof of payment.\nThank you for your payment.";
+
 const defaultPrintReceiptConfig = () => ({
   Name: "Default Thermal Receipt",
   CompanyName: DEFAULT_COMPANY_NAME,
   ReceiptTitle: "Acknowledgement Receipt",
   ReceiptSubtitle: "",
-  FooterNote: "Thank you for your payment.",
+  FooterNote: DEFAULT_FOOTER_NOTE,
   PreferredPrinterName: "",
+  PrinterConnectionType: "USB",
+  NetworkPrinterHost: "",
+  NetworkPrinterPort: "9100",
   EnablePrinting: true,
   UseDirectPrint: true,
   ShowSubscriptionCover: true,
@@ -33,6 +38,16 @@ const sanitizeConfig = (config = {}) => {
     PreferredPrinterName: String(
       config.PreferredPrinterName ?? defaults.PreferredPrinterName
     ).trim(),
+    PrinterConnectionType:
+      String(config.PrinterConnectionType || "").trim().toUpperCase() === "NETWORK"
+        ? "NETWORK"
+        : "USB",
+    NetworkPrinterHost: String(
+      config.NetworkPrinterHost ?? defaults.NetworkPrinterHost
+    ).trim(),
+    NetworkPrinterPort: String(
+      config.NetworkPrinterPort ?? defaults.NetworkPrinterPort
+    ).trim() || defaults.NetworkPrinterPort,
     EnablePrinting: Boolean(
       config.EnablePrinting ?? defaults.EnablePrinting
     ),

@@ -54,6 +54,67 @@ const buildDisconnectedClientFilter = () => ({
   ]
 });
 
+const isDisconnectedClientRecord = (client = {}) =>
+  isDisconnectedPlanValue(client.Status, client.Profile, client.NetPlan);
+
+const getDateKey = (value) => {
+  if (!value) {
+    return "";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("-");
+};
+
+const buildDueDateFilter = (dateKey) => {
+  const normalizedDateKey = getDateKey(dateKey);
+  if (!normalizedDateKey) {
+    return null;
+  }
+
+  const [year, month, day] = normalizedDateKey.split("-").map(Number);
+  const start = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const end = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
+  const slashDate = `${String(month).padStart(2, "0")}/${String(day).padStart(
+    2,
+    "0"
+  )}/${year}`;
+
+  return {
+    $or: [
+      { DueDate: { $gte: start, $lt: end } },
+      { DueDate: normalizedDateKey },
+      { DueDate: slashDate },
+      { DueDate: { $regex: new RegExp(`^${normalizedDateKey}`) } }
+    ]
+  };
+};
+
+const clientMatchesSearch = (client = {}, search = "") => {
+  const normalizedSearch = String(search || "").trim().toLowerCase();
+  if (!normalizedSearch) {
+    return true;
+  }
+
+  return [
+    client.ClientName,
+    client.AccountName,
+    client.AccountNumber,
+    client.ContactNumber,
+    client.Address,
+    client.NetPlan,
+    client.Profile
+  ].some((value) => String(value || "").toLowerCase().includes(normalizedSearch));
+};
+
 const getIpoeModemStatus = (lease) => {
   if (!lease) {
     return "NO MAC FOUND";
@@ -75,22 +136,6 @@ const getIpoeModemStatus = (lease) => {
   return "ACTIVE";
 };
 
-
-// ✅ GET CLIENTS
-exports.getClients = async (req, res) => {
-  try {
-    const data = await mongoose.connection.db
-      .collection(collections.clients)
-      .find({})
-      .toArray();
-
-    console.log("✅ DATA COUNT:", data.length);
-    res.json(data);
-  } catch (err) {
-    console.error("❌ QUERY ERROR:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
 
 // ✅ ADD CLIENT
 exports.getClientById = async (req, res) => {
@@ -821,6 +866,7 @@ exports.getClients = async (req, res) => {
     const collection = mongoose.connection.db.collection(collections.clients);
     const status = String(req.query?.status || "ACTIVE").trim().toUpperCase();
     const rawSearch = String(req.query?.search || "").trim();
+    const dueDateFilter = buildDueDateFilter(req.query?.dueDate);
     const page = Math.max(Number.parseInt(req.query?.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(req.query?.limit, 10) || 10, 1), 100);
     const skip = (page - 1) * limit;
@@ -831,22 +877,29 @@ exports.getClients = async (req, res) => {
         ? disconnectedFilter
         : { $nor: disconnectedFilter.$or };
 
-    const query = { ...statusFilter };
+    const baseFilters = [];
 
     if (rawSearch) {
       const escapedSearch = rawSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const searchRegex = new RegExp(`(?:^|[\\s_-])${escapedSearch}`, "i");
 
-      query.$and = [
-        ...(query.$and || []),
-        {
-          $or: [
-            { AccountName: searchRegex },
-            { ClientName: searchRegex }
-          ]
-        }
-      ];
+      baseFilters.push({
+        $or: [
+          { AccountName: searchRegex },
+          { ClientName: searchRegex },
+          { AccountNumber: searchRegex },
+          { ContactNumber: searchRegex }
+        ]
+      });
     }
+
+    if (dueDateFilter) {
+      baseFilters.push(dueDateFilter);
+    }
+
+    const query = baseFilters.length
+      ? { $and: [...baseFilters, statusFilter] }
+      : { ...statusFilter };
 
     const [rows, total, activeCount, disconnectedCount] = await Promise.all([
       collection
@@ -856,8 +909,16 @@ exports.getClients = async (req, res) => {
         .limit(limit)
         .toArray(),
       collection.countDocuments(query),
-      collection.countDocuments({ $nor: disconnectedFilter.$or }),
-      collection.countDocuments(disconnectedFilter)
+      collection.countDocuments(
+        baseFilters.length
+          ? { $and: [...baseFilters, { $nor: disconnectedFilter.$or }] }
+          : { $nor: disconnectedFilter.$or }
+      ),
+      collection.countDocuments(
+        baseFilters.length
+          ? { $and: [...baseFilters, disconnectedFilter] }
+          : disconnectedFilter
+      )
     ]);
 
     res.json({
