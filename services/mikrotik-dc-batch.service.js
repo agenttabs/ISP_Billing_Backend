@@ -280,10 +280,36 @@ const getMinutesFromTimeKey = (value) => {
   return hours * 60 + minutes;
 };
 
-const isBypassClient = (client, bypassAccountKeys, bypassClientIds) => {
+const isTruthyFlag = (value) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = normalizeText(value);
+  return ["1", "TRUE", "YES", "Y", "VIP", "BYPASS"].includes(normalized);
+};
+
+const isVipOrBypassFlaggedClient = (client = {}) =>
+  isTruthyFlag(client?.IsVip) ||
+  isTruthyFlag(client?.isVip) ||
+  isTruthyFlag(client?.VIP) ||
+  isTruthyFlag(client?.Vip) ||
+  isTruthyFlag(client?.IsBypass) ||
+  isTruthyFlag(client?.isBypass) ||
+  isTruthyFlag(client?.Bypass) ||
+  isTruthyFlag(client?.ClientType) ||
+  isTruthyFlag(client?.AccountType);
+
+const isBypassClient = (client, bypassAccountKeys, bypassAccountNumbers, bypassClientIds) => {
   const accountKey = normalizeText(client?.AccountName);
+  const accountNumber = String(client?.AccountNumber || "").trim();
   const clientId = String(client?._id || "").trim();
-  return (accountKey && bypassAccountKeys.has(accountKey)) || (clientId && bypassClientIds.has(clientId));
+  return (
+    isVipOrBypassFlaggedClient(client) ||
+    (accountKey && bypassAccountKeys.has(accountKey)) ||
+    (accountNumber && bypassAccountNumbers.has(accountNumber)) ||
+    (clientId && bypassClientIds.has(clientId))
+  );
 };
 
 const getPlanPrice = (plan) => Number(plan?.Price ?? plan?.price ?? 0);
@@ -341,6 +367,11 @@ const generateMikrotikDcBatchReport = async ({
       .map((row) => normalizeText(row?.AccountNameKey || row?.AccountName))
       .filter(Boolean)
   );
+  const bypassAccountNumbers = new Set(
+    (bypassRows || [])
+      .map((row) => String(row?.AccountNumber || "").trim())
+      .filter(Boolean)
+  );
   const bypassClientIds = new Set(
     (bypassRows || [])
       .map((row) => String(row?.ClientId || "").trim())
@@ -366,7 +397,7 @@ const generateMikrotikDcBatchReport = async ({
 
     checkedCount += 1;
 
-    if (isBypassClient(client, bypassAccountKeys, bypassClientIds)) {
+    if (isBypassClient(client, bypassAccountKeys, bypassAccountNumbers, bypassClientIds)) {
       bypassSkippedCount += 1;
       continue;
     }

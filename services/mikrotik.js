@@ -242,6 +242,12 @@ const updatePPPoEUser = async ({ username, password, profile, location }) => {
 //disconnectPPPp
 const disconnectPPPoEUser = async (username, location) => {
     const server = await getMikrotikConfigAC();
+    const usernameValue = String(username || "").trim();
+
+    if (!usernameValue) {
+        console.log("PPP active disconnect skipped: username is empty.");
+        return;
+    }
 
     const client = new RouterOSClient({
         host: server.Address,
@@ -252,19 +258,34 @@ const disconnectPPPoEUser = async (username, location) => {
 
     try {
         const conn = await client.connect();
+        console.log("PPP active disconnect check:", usernameValue);
 
         // 🔍 find active session
-        const active = await conn.menu("/ppp/active").where({
-            name: username
-        });
+        const activeUsers = await conn
+            .menu("/ppp/active")
+            .where({ name: usernameValue })
+            .proplist([".id", "name", "address", "uptime"])
+            .get();
+        const activeSessions = Array.isArray(activeUsers) ? activeUsers : [];
+        console.log("PPP active disconnect active count:", activeSessions.length, "username:", usernameValue);
 
-        if (active.length > 0) {
-            const id = active[0][".id"];
+        if (activeSessions.length > 0) {
+            for (const active of activeSessions) {
+                const activeId = active?.[".id"] || active?.id;
+                if (!activeId) {
+                    console.log("PPP active disconnect skipped entry without activeId:", usernameValue);
+                    continue;
+                }
 
-            // 🔥 REMOVE SESSION (force reconnect)
-            await conn.menu("/ppp/active").remove({ ".id": id });
+                console.log("PPP active disconnect removing:", usernameValue, "activeId:", activeId);
 
-            console.log("⚡ PPP USER DISCONNECTED:", username);
+                // 🔥 REMOVE SESSION (force reconnect)
+                await conn.menu("/ppp/active").remove(activeId);
+
+                console.log("PPP active disconnect removed:", usernameValue, "activeId:", activeId);
+            }
+        } else {
+            console.log("PPP active disconnect skipped: no active connection found for", usernameValue);
         }
     } catch (err) {
         console.error("❌ DISCONNECT ERROR:", err);
@@ -1215,14 +1236,6 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
             console.log("PPP target ID: (not found, will recreate)");
         }
 
-        const clearActiveSessions = async (nameToClear) => {
-            if (!nameToClear) {
-                return;
-            }
-
-            console.log("Skipping PPP active cleanup for:", nameToClear);
-        };
-
         if (oldUsername && username && oldUsername !== username && oldTarget?.id) {
             try {
                 await conn.menu("/ppp/secret").remove(oldTarget.id);
@@ -1234,7 +1247,6 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
                 }
             }
 
-            await clearActiveSessions(oldUsername);
         }
 
         if (target?.id) {
@@ -1254,7 +1266,6 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
                 console.log(nextComment ? "PPP COMMENT UPDATED:" : "PPP COMMENT CLEARED:", username || targetUsername);
                 console.log("PPP user updated:", username || targetUsername);
                 console.log("PPP USER UPDATED:", username || targetUsername);
-                await clearActiveSessions(username || targetUsername);
                 console.log("=== PPP UPDATE END (IN-PLACE) ===");
                 return;
             } catch (err) {
@@ -1275,7 +1286,6 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
                 }
             }
 
-            await clearActiveSessions(targetUsername);
         }
 
         const pppSecretCreatePayload = {
@@ -1291,7 +1301,6 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
         console.log(nextComment ? "PPP COMMENT UPDATED AFTER RECREATE:" : "PPP COMMENT CLEARED AFTER RECREATE:", username || targetUsername);
         console.log("PPP user updated:", username || targetUsername);
         console.log("PPP USER RECREATED:", username || targetUsername);
-        await clearActiveSessions(username || targetUsername);
         console.log("=== PPP UPDATE END (RECREATE) ===");
     } catch (err) {
         console.error("=== PPP UPDATE ERROR ===");

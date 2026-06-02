@@ -1,4 +1,6 @@
 const mongoose = require("mongoose");
+const fs = require("fs");
+const path = require("path");
 const { ObjectId } = mongoose.Types;
 const collections = require("../config/collections");
 const { writeAuditLog } = require("../services/audit-log.service");
@@ -39,6 +41,51 @@ const getExpenseTransactionDateValue = (row) =>
 
 const parseMoneyValue = (value) =>
   Number(String(value || 0).replace(/,/g, "")) || 0;
+
+const UPLOAD_ROOT = process.env.UPLOAD_ROOT || path.join(__dirname, "..", "..", "isp_billing_uploads");
+const RECEIPT_UPLOAD_DIR = path.join(UPLOAD_ROOT, "receipts");
+
+const sanitizeFileToken = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/[^a-z0-9_-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+
+const getReceiptImageDateFolder = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const year = safeDate.getFullYear();
+  const month = String(safeDate.getMonth() + 1).padStart(2, "0");
+  const day = String(safeDate.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+};
+
+const storeReceiptImageFile = (value, receiptNumber = "") => {
+  const raw = String(value || "").trim();
+
+  if (!raw || !raw.startsWith("data:image/")) {
+    return raw;
+  }
+
+  const match = raw.match(/^data:image\/(png|jpe?g|webp);base64,(.+)$/i);
+  if (!match) {
+    return raw;
+  }
+
+  const extension = match[1].toLowerCase() === "jpeg" ? "jpg" : match[1].toLowerCase();
+  const baseName = sanitizeFileToken(receiptNumber) || `receipt-${Date.now()}`;
+  const dateFolder = getReceiptImageDateFolder();
+  const fileName = `${baseName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
+  const uploadDir = path.join(RECEIPT_UPLOAD_DIR, dateFolder);
+  const filePath = path.join(uploadDir, fileName);
+
+  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.writeFileSync(filePath, Buffer.from(match[2], "base64"));
+
+  return `/uploads/receipts/${dateFolder}/${fileName}`;
+};
 
 const normalizePayrollSchedule = (value) => {
   const normalized = String(value || "").trim().toUpperCase();
@@ -1779,8 +1826,14 @@ exports.createTransaction = async (req, res) => {
 exports.createEarning = async (req, res) => {
   try {
     const actor = getRequestActor(req);
+    const receiptImagePath = storeReceiptImageFile(
+      req.body.ReceiptImage,
+      req.body.PaymentReceipt || req.body.Invoice || req.body.MOPRef || ""
+    );
     const payload = {
       ...req.body,
+      ReceiptImage: receiptImagePath,
+      ReceiptImageStorage: receiptImagePath && receiptImagePath !== req.body.ReceiptImage ? "file" : "",
       DeclaredBy: actor.display || "",
       DeclaredById: actor.id || "",
       CreatedBy: actor.display || "",

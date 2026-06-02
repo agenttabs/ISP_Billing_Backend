@@ -176,9 +176,8 @@ const getStatementRange = (client) => {
 
 const buildTemplateValues = (client) => {
   const statementRange = getStatementRange(client);
-  const previousBalance = Math.max(Number(client?.Balance || 0), 0);
   const monthlyDue = Number(client?.AmountDue || 0);
-  const totalAmountDue = monthlyDue + previousBalance;
+  const totalAmountDue = monthlyDue;
   const subscriptionCover =
     statementRange.start && statementRange.end
       ? `${formatDate(statementRange.start)} to ${formatDate(statementRange.end)}`
@@ -256,7 +255,6 @@ const getProgramRecipients = async (program) => {
           DueDate: 1,
           AmountDue: 1,
           amountDue: 1,
-          Balance: 1,
           PaymentStatus: 1,
           NetPlan: 1,
           Profile: 1,

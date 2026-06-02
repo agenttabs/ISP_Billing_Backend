@@ -1,6 +1,7 @@
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
+const path = require("path");
 
 const connectDB = require("./config/db.runtime");
 const clientRoutes = require("./Routes/client.route");
@@ -40,13 +41,19 @@ const rateLimit = require("express-rate-limit");
 const authRoutes = require("./Routes/auth.routes");
 const { initRealtime } = require("./services/realtime.service");
 
-app.use(helmet({ contentSecurityPolicy: false }));
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 app.use(morgan("dev"));
 
 // middleware
 app.use(cors());
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: process.env.JSON_BODY_LIMIT || "2mb" }));
+const uploadRoot = process.env.UPLOAD_ROOT || path.join(__dirname, "..", "isp_billing_uploads");
+app.use("/uploads", express.static(uploadRoot));
+app.use("/api/uploads", express.static(uploadRoot));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,

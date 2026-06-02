@@ -9,6 +9,7 @@ const {
 const { emitClientsChanged } = require("../services/realtime.service");
 
 const { addPPPoEUser, addIpoeDisconnectScheduler, checkPPPoEUser, clearIpoeLeaseComment, updatePPPoEUser, disconnectPPPoEUser, removePPPoEActiveConnection, addDisconnectScheduler, removeScheduler, getDhcpLeaseByMacAddress, getDhcpLeasesNoComment, getDhcpLeasesWithComments, setIpoeLeaseStatic, getClientMikrotikStatus } = require("../services/mikrotik");
+const { getDisconnectAfterDueDays } = require("../services/system-settings.service");
 
 
 
@@ -45,6 +46,62 @@ const parseAmountValue = (value) => {
 };
 
 const PPP_DISCONNECTED_PROFILE = "dc-putol";
+
+const MANILA_TIMEZONE = "Asia/Manila";
+
+const getManilaDateParts = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: MANILA_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const partMap = parts.reduce((map, part) => {
+    map[part.type] = part.value;
+    return map;
+  }, {});
+
+  return {
+    year: Number(partMap.year),
+    month: Number(partMap.month),
+    day: Number(partMap.day)
+  };
+};
+
+const getManilaTodayStart = () => {
+  const parts = getManilaDateParts(new Date());
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+};
+
+const parseDateOnlyUtc = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+};
+
+const addDaysUtc = (date, days) => {
+  const nextDate = new Date(date);
+  nextDate.setUTCDate(nextDate.getUTCDate() + Number(days || 0));
+  return nextDate;
+};
+
+const isDuePastDisconnectGrace = (dueDateValue, graceDays) => {
+  const dueDate = parseDateOnlyUtc(dueDateValue);
+  if (!dueDate) {
+    return false;
+  }
+
+  const disconnectDate = addDaysUtc(dueDate, graceDays);
+  return disconnectDate.getTime() <= getManilaTodayStart().getTime();
+};
 
 const buildDisconnectedClientFilter = () => ({
   $or: [
@@ -393,6 +450,13 @@ exports.updateClient = async (req, res) => {
       console.log("=== CLIENT CONTROLLER PPP UPDATE CALL ===");
       console.log("PPP UPDATE ACCOUNT:", updateData.AccountName || oldClient.AccountName);
       console.log("PPP UPDATE PROFILE:", updateData.Profile || oldClient.Profile);
+      const shouldRefreshOverduePppoeSession =
+        !nextIsDisconnectedPlan &&
+        isDuePastDisconnectGrace(
+          oldClient.DueDate,
+          await getDisconnectAfterDueDays()
+        );
+
         await updatePPPoEUser({
           oldUsername: oldClient.AccountName,
           username: updateData.AccountName,
@@ -402,6 +466,11 @@ exports.updateClient = async (req, res) => {
           disconnectRemark: nextIsDisconnectedPlan ? pppoeDisconnectRemark : ""
         });
         if (nextIsDisconnectedPlan) {
+          await disconnectPPPoEUser(
+            nextAccountName,
+            updateData.ServerLocation || oldClient.ServerLocation
+          );
+        } else if (shouldRefreshOverduePppoeSession) {
           await disconnectPPPoEUser(
             nextAccountName,
             updateData.ServerLocation || oldClient.ServerLocation
