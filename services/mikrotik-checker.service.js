@@ -11,6 +11,11 @@ const normalizeText = (value) =>
     .trim()
     .toUpperCase();
 
+const normalizeAccountNumber = (value) =>
+  String(value || "")
+    .replace(/\s+/g, "")
+    .trim();
+
 const extractSpeedNumber = (value) => {
   const match = String(value || "").match(/(\d+(?:\.\d+)?)/);
   return match ? Number(match[1]) : null;
@@ -47,6 +52,55 @@ const isDisconnectedValue = (...values) =>
       normalized === "0M/0M"
     );
   });
+
+const isTruthyFlag = (value) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = normalizeText(value);
+  return (
+    ["1", "TRUE", "YES", "Y"].includes(normalized) ||
+    normalized.includes("VIP") ||
+    normalized.includes("BYPASS")
+  );
+};
+
+const isVipOrBypassFlaggedClient = (client = {}) =>
+  isTruthyFlag(client?.IsVip) ||
+  isTruthyFlag(client?.isVip) ||
+  isTruthyFlag(client?.VIP) ||
+  isTruthyFlag(client?.Vip) ||
+  isTruthyFlag(client?.IsBypass) ||
+  isTruthyFlag(client?.isBypass) ||
+  isTruthyFlag(client?.Bypass) ||
+  isTruthyFlag(client?.ClientType) ||
+  isTruthyFlag(client?.AccountType);
+
+const isBypassAccountName = (accountName, bypassAccountKeys) => {
+  const accountKey = normalizeText(accountName);
+  return Boolean(accountKey && bypassAccountKeys.has(accountKey));
+};
+
+const isBypassClient = (
+  client,
+  bypassAccountKeys,
+  bypassAccountNumbers,
+  bypassClientIds,
+  bypassClientNames
+) => {
+  const accountKey = normalizeText(client?.AccountName);
+  const accountNumber = normalizeAccountNumber(client?.AccountNumber);
+  const clientId = String(client?._id || "").trim();
+  const clientName = normalizeText(client?.ClientName);
+  return (
+    isVipOrBypassFlaggedClient(client) ||
+    (accountKey && bypassAccountKeys.has(accountKey)) ||
+    (accountNumber && bypassAccountNumbers.has(accountNumber)) ||
+    (clientId && bypassClientIds.has(clientId)) ||
+    (clientName && bypassClientNames.has(clientName))
+  );
+};
 
 const getCollection = (name) => mongoose.connection.db.collection(name);
 
@@ -150,11 +204,22 @@ const resolveMikrotikPlan = ({ rawValue }) => ({
 });
 
 const plansMatch = (systemPlan, mikrotikPlan) => {
+  if (systemPlan.normalized && systemPlan.normalized === mikrotikPlan.normalized) {
+    return true;
+  }
+
+  if (
+    systemPlan.normalized.includes("PROFILE") ||
+    mikrotikPlan.normalized.includes("PROFILE")
+  ) {
+    return false;
+  }
+
   if (systemPlan.speedKey && mikrotikPlan.speedKey) {
     return systemPlan.speedKey === mikrotikPlan.speedKey;
   }
 
-  return Boolean(systemPlan.normalized) && systemPlan.normalized === mikrotikPlan.normalized;
+  return false;
 };
 
 const createIssueRow = ({
@@ -327,17 +392,45 @@ const updateRunSummary = async (fields) => {
 
 const generateMikrotikCheckerReport = async () => {
   const db = mongoose.connection.db;
-  const [clients, netPlans, snapshot] = await Promise.all([
+  const [clients, netPlans, bypassRows, snapshot] = await Promise.all([
     db.collection(collections.clients).find({}).toArray(),
     db.collection(collections.netPlans).find({}).toArray(),
+    db.collection(collections.clientBypass).find({}).toArray(),
     getMikrotikCheckerSnapshot()
   ]);
 
   const netPlanLookup = buildNetPlanLookup(netPlans);
+  const bypassAccountKeys = new Set(
+    (bypassRows || [])
+      .map((row) => normalizeText(row?.AccountNameKey || row?.AccountName))
+      .filter(Boolean)
+  );
+  const bypassAccountNumbers = new Set(
+    (bypassRows || [])
+      .map((row) => normalizeAccountNumber(row?.AccountNumberKey || row?.AccountNumber))
+      .filter(Boolean)
+  );
+  const bypassClientIds = new Set(
+    (bypassRows || [])
+      .map((row) => String(row?.ClientId || "").trim())
+      .filter(Boolean)
+  );
+  const bypassClientNames = new Set(
+    (bypassRows || [])
+      .map((row) => normalizeText(row?.ClientNameKey || row?.ClientName))
+      .filter(Boolean)
+  );
   const systemClients = (clients || []).filter((client) => {
     const authMode = normalizeText(client.AuthenticationMode);
     return (
       ["PPPOE", "IPOE"].includes(authMode) &&
+      !isBypassClient(
+        client,
+        bypassAccountKeys,
+        bypassAccountNumbers,
+        bypassClientIds,
+        bypassClientNames
+      ) &&
       !isDisconnectedValue(client.Profile, client.NetPlan, client.Status)
     );
   });
@@ -355,9 +448,10 @@ const generateMikrotikCheckerReport = async () => {
     }
   }
 
-  const allPppSecrets = (snapshot?.pppSecrets || []).filter((row) =>
-    Boolean(normalizeText(row?.name))
-  );
+  const allPppSecrets = (snapshot?.pppSecrets || []).filter((row) => {
+    const accountName = normalizeText(row?.name);
+    return Boolean(accountName) && !isBypassAccountName(accountName, bypassAccountKeys);
+  });
   const allPppSecretMap = new Map(allPppSecrets.map((row) => [normalizeText(row?.name), row]));
   const pppSecrets = allPppSecrets.filter((row) => {
     const name = normalizeText(row?.name);
@@ -368,7 +462,11 @@ const generateMikrotikCheckerReport = async () => {
   const dhcpLeases = (snapshot?.dhcpLeases || []).filter((row) => {
     const accountName = normalizeIpoeCommentName(row?.comment);
     const plan = extractIpoeCommentPlan(row?.comment);
-    return Boolean(accountName) && !isDisconnectedValue(plan);
+    return (
+      Boolean(accountName) &&
+      !isBypassAccountName(accountName, bypassAccountKeys) &&
+      !isDisconnectedValue(plan)
+    );
   });
 
   const pppSecretMap = new Map(pppSecrets.map((row) => [normalizeText(row?.name), row]));
