@@ -257,14 +257,31 @@ const appendClientNote = (currentNote, nextNote) => {
 };
 
 const getMinutesFromTimeKey = (value) => {
-  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  const match = String(value || "")
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})(?:\s*([ap]m))?$/i);
 
   if (!match) {
     return null;
   }
 
-  const hours = Number(match[1]);
+  let hours = Number(match[1]);
   const minutes = Number(match[2]);
+  const meridiem = String(match[3] || "").trim().toLowerCase();
+
+  if (meridiem) {
+    if (hours < 1 || hours > 12) {
+      return null;
+    }
+
+    if (meridiem === "pm" && hours < 12) {
+      hours += 12;
+    }
+
+    if (meridiem === "am" && hours === 12) {
+      hours = 0;
+    }
+  }
 
   if (
     !Number.isInteger(hours) ||
