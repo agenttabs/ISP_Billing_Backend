@@ -180,7 +180,7 @@ const updatePPPoEUser = async ({ username, password, profile, location }) => {
         const users = await conn
             .menu("/ppp/secret")
             .where({})
-            .proplist([".id", "name"])
+            .proplist([".id", "name", "comment"])
             .get();
 
         const target = users.find(u => u.name === username);
@@ -1271,19 +1271,20 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
 
         if (target?.id) {
             try {
+                const pppSecretComment = appendMikrotikComment(target.comment, nextComment);
                 const pppSecretUpdatePayload = {
                     name: username || targetUsername,
                     password,
                     profile,
                     service: "pppoe",
-                    comment: nextComment
+                    comment: pppSecretComment
                 };
 
                 await conn.menu("/ppp/secret").update(
                     pppSecretUpdatePayload,
                     target.id
                 );
-                console.log(nextComment ? "PPP COMMENT UPDATED:" : "PPP COMMENT CLEARED:", username || targetUsername);
+                console.log(pppSecretComment ? "PPP COMMENT UPDATED:" : "PPP COMMENT CLEARED:", username || targetUsername);
                 console.log("PPP user updated:", username || targetUsername);
                 console.log("PPP USER UPDATED:", username || targetUsername);
                 console.log("=== PPP UPDATE END (IN-PLACE) ===");
@@ -1313,7 +1314,7 @@ const updatePPPoEUserSafe = async ({ oldUsername, username, password, profile, l
             password,
             profile,
             service: "pppoe",
-            comment: nextComment
+            comment: appendMikrotikComment(target?.comment, nextComment)
         };
 
         await conn.menu("/ppp/secret").add(pppSecretCreatePayload);
