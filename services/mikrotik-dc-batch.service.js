@@ -28,6 +28,7 @@ const defaultMikrotikDcBatchConfig = () => ({
   IsActive: false,
   DisconnectedPlanName: DEFAULT_DISCONNECTED_PLAN,
   LastRunKey: "",
+  LastScheduledRunKey: "",
   LastRunAt: null,
   LastRunSummary: "",
   LastError: ""
@@ -48,6 +49,7 @@ const sanitizeConfig = (config) => {
       String(config?.DisconnectedPlanName || defaults.DisconnectedPlanName).trim() ||
       defaults.DisconnectedPlanName,
     LastRunKey: String(config?.LastRunKey || "").trim(),
+    LastScheduledRunKey: String(config?.LastScheduledRunKey || "").trim(),
     LastRunAt: config?.LastRunAt || null,
     LastRunSummary: String(config?.LastRunSummary || "").trim(),
     LastError: String(config?.LastError || "").trim()
@@ -567,6 +569,7 @@ const generateMikrotikDcBatchReport = async ({
     const runSummary = `Checked ${checkedCount} client(s). Eligible after ${graceDays} day(s): ${disconnectedFoundCount}. Updated in system: ${updatedCount}. Skipped bypass: ${bypassSkippedCount}. System-only updates for missing PPPoE secret: ${pppoeSecretNotFoundSystemOnlyCount}.`;
     await updateRunSummary({
       LastRunKey: getManilaDateKey(generatedAt),
+      ...(triggeredBy ? {} : { LastScheduledRunKey: getManilaDateKey(generatedAt) }),
       LastRunAt: generatedAt,
       LastRunSummary: runSummary,
       LastError: ""
@@ -628,7 +631,7 @@ const runScheduledMikrotikDcBatch = async () => {
     const currentMinutes = parts.hour * 60 + parts.minute;
     const todayKey = getManilaDateKey(now);
 
-    if (currentMinutes < targetMinutes || config.LastRunKey === todayKey) {
+    if (currentMinutes < targetMinutes || config.LastScheduledRunKey === todayKey) {
       return;
     }
 
