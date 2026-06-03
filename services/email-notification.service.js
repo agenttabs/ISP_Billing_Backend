@@ -39,6 +39,22 @@ const defaultEmailNotificationConfig = () => ({
   LastError: ""
 });
 
+const getPdfTextLines = (doc, value, maxWidth, maxLines = 2) => {
+  const lines = doc.splitTextToSize(String(value || "").trim() || "-", maxWidth);
+
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+
+  const visibleLines = lines.slice(0, maxLines);
+  const lastLineIndex = visibleLines.length - 1;
+  const lastLine = visibleLines[lastLineIndex] || "";
+  visibleLines[lastLineIndex] =
+    lastLine.length > 3 ? `${lastLine.slice(0, -3).trimEnd()}...` : "...";
+
+  return visibleLines;
+};
+
 const getCollection = (name) => mongoose.connection.db.collection(name);
 
 const getGmailDefaults = async () => {
@@ -258,15 +274,21 @@ const buildBillingPdfBuffer = (client, history = [], companyName = DEFAULT_COMPA
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
   doc.text(String(client?.ClientName || "-"), 18, 53);
-  doc.text(String(client?.Address || "No address provided"), 18, 59);
-  doc.text(`Contact: ${client?.ContactNumber || "N/A"}`, 18, 65);
+  const addressLines = getPdfTextLines(
+    doc,
+    client?.Address || "No address provided",
+    82,
+    2
+  );
+  doc.text(addressLines, 18, 59);
+  doc.text(`Contact: ${client?.ContactNumber || "N/A"}`, 18, 70);
 
   doc.text(`Account Number: ${client?.AccountNumber || "-"}`, 112, 53);
   doc.text(`Plan: ${formatCurrency(client?.AmountDue || 0)}`, 112, 59);
   doc.text(`Due Date: ${formatDate(client?.DueDate)}`, 112, 65);
 
   autoTable(doc, {
-    startY: 80,
+    startY: 84,
     head: [["Summary", "Value"]],
     body: [
       ["Monthly Due", formatCurrency(monthlyDue)],

@@ -886,6 +886,25 @@ const clearIpoeLeaseComment = async ({ macAddress }) => {
     }
 };
 
+const appendMikrotikComment = (existingComment, nextRemark) => {
+    const existing = String(existingComment || "").trim();
+    const remark = String(nextRemark || "").trim();
+
+    if (!remark) {
+        return existing;
+    }
+
+    if (!existing) {
+        return remark;
+    }
+
+    if (existing.includes(remark)) {
+        return existing;
+    }
+
+    return `${existing}\n${remark}`;
+};
+
 const setPPPoESecretDisconnected = async ({
     username,
     password = "",
@@ -931,16 +950,17 @@ const setPPPoESecretDisconnected = async ({
         const users = await conn
             .menu("/ppp/secret")
             .where({})
-            .proplist([".id", "name", "password"])
+            .proplist([".id", "name", "password", "comment"])
             .get();
 
         const target = users.find((user) => user.name === username);
+        const nextComment = appendMikrotikComment(target?.comment, disconnectRemark);
 
         if (!target?.id) {
             return {
                 username,
                 profile: String(profile || "").trim(),
-                comment: String(disconnectRemark || "").trim(),
+                comment: nextComment,
                 secretFound: false
             };
         }
@@ -951,7 +971,7 @@ const setPPPoESecretDisconnected = async ({
                 password: password || target.password || "",
                 profile: matchedProfile.name,
                 service: "pppoe",
-                comment: String(disconnectRemark || "").trim()
+                comment: nextComment
             },
             target.id
         );
@@ -978,7 +998,7 @@ const setPPPoESecretDisconnected = async ({
         return {
             username,
             profile: matchedProfile.name,
-            comment: String(disconnectRemark || "").trim(),
+            comment: nextComment,
             secretFound: true
         };
     } finally {
