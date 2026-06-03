@@ -355,7 +355,11 @@ const generateMikrotikCheckerReport = async () => {
     }
   }
 
-  const pppSecrets = (snapshot?.pppSecrets || []).filter((row) => {
+  const allPppSecrets = (snapshot?.pppSecrets || []).filter((row) =>
+    Boolean(normalizeText(row?.name))
+  );
+  const allPppSecretMap = new Map(allPppSecrets.map((row) => [normalizeText(row?.name), row]));
+  const pppSecrets = allPppSecrets.filter((row) => {
     const name = normalizeText(row?.name);
     const profile = normalizeText(row?.profile);
     return Boolean(name) && !isDisconnectedValue(profile);
@@ -385,6 +389,12 @@ const generateMikrotikCheckerReport = async () => {
     const systemPlan = resolveSystemPlan({ client, netPlanLookup });
 
     if (authMode === "PPPOE") {
+      const mikrotikSecret = allPppSecretMap.get(accountNameKey);
+
+      if (mikrotikSecret && isDisconnectedValue(mikrotikSecret.profile)) {
+        continue;
+      }
+
       const mikrotikUser = pppSecretMap.get(accountNameKey);
 
       if (!mikrotikUser) {
