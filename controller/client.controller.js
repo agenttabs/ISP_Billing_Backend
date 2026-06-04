@@ -509,12 +509,15 @@ exports.updateClient = async (req, res) => {
       oldNetPlanValue !== nextNetPlanValue;
     const shouldAlwaysRefreshIpoeScheduler =
       nextAuthMode === "IPOE" && !nextIsDisconnectedPlan;
+    const shouldAlwaysRefreshPppoeScheduler =
+      nextAuthMode === "PPPOE" && !nextIsDisconnectedPlan;
     const schedulerNeedsRefresh =
       dueChanged ||
       accountChanged ||
       macChanged ||
       authChanged ||
       planChanged ||
+      shouldAlwaysRefreshPppoeScheduler ||
       shouldAlwaysRefreshIpoeScheduler;
     const shouldForceRemoveDisconnectedScheduler =
       nextAuthMode === "IPOE" && nextIsDisconnectedPlan;
@@ -650,6 +653,46 @@ exports.adjustClientDueDate = async (req, res) => {
           }
         }
       );
+
+    const authMode = String(existingClient.AuthenticationMode || "").trim().toUpperCase();
+    const isDisconnectedPlan = isDisconnectedPlanValue(
+      existingClient.Profile,
+      existingClient.NetPlan,
+      existingClient.Status
+    );
+    const amountDue = parseAmountValue(existingClient.AmountDue);
+    const accountName = existingClient.AccountName || "";
+    const serverLocation = existingClient.ServerLocation;
+
+    await removeScheduler({
+      username: accountName,
+      location: serverLocation
+    });
+
+    if (amountDue > 0 && !isDisconnectedPlan) {
+      if (authMode === "IPOE") {
+        const macAddress = String(
+          existingClient.MacAddress || existingClient.macAddress || ""
+        )
+          .trim()
+          .toUpperCase();
+
+        if (macAddress) {
+          await addIpoeDisconnectScheduler({
+            username: accountName,
+            dueDate,
+            macAddress,
+            location: serverLocation
+          });
+        }
+      } else if (authMode === "PPPOE") {
+        await addDisconnectScheduler({
+          username: accountName,
+          dueDate,
+          location: serverLocation
+        });
+      }
+    }
 
     emitClientsChanged({
       action: "adjust-due-date",
