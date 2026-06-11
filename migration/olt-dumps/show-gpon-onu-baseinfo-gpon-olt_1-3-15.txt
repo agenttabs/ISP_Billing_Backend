@@ -1,0 +1,5 @@
+
+OnuIndex            Type        Mode    AuthInfo                State
+-------------------------------------------------------------------------------
+gpon-onu_1/3/15:1   F670T       sn      SN:HWTC2772BF70         ready
+ZXAN#

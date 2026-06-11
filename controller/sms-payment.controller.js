@@ -1,6 +1,10 @@
 const mongoose = require("mongoose");
 const collections = require("../config/collections");
-const { sendPaymentReceivedSms, sendPaymentReminderSms } = require("../services/sms.service");
+const {
+  sendPaymentReceivedSms,
+  sendPaymentReminderSms,
+  sendPaymentCorrectionSms: sendPaymentCorrectionSmsService
+} = require("../services/sms.service");
 const { writeAuditLog } = require("../services/audit-log.service");
 
 exports.sendPaymentReceivedSms = async (req, res) => {
@@ -195,6 +199,55 @@ exports.sendLatestPaymentReceivedSms = async (req, res) => {
       summary: "Latest payment received SMS failed.",
       details: {
         error: err.message
+      }
+    });
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.sendPaymentCorrectionSms = async (req, res) => {
+  try {
+    const result = await sendPaymentCorrectionSmsService({
+      client: req.body.client,
+      dueDate: req.body.dueDate,
+      subscriptionCover: req.body.subscriptionCover
+    });
+
+    await writeAuditLog({
+      req,
+      module: "SMS",
+      action: "SEND_PAYMENT_CORRECTION",
+      targetType: "SMS",
+      accountName: req.body?.client?.AccountName || "",
+      status: result?.sent ? "SUCCESS" : "SKIPPED",
+      summary: result?.sent
+        ? "Payment correction SMS sent."
+        : "Payment correction SMS skipped.",
+      details: result,
+      values: {
+        client: req.body.client,
+        dueDate: req.body.dueDate,
+        subscriptionCover: req.body.subscriptionCover
+      }
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error("SMS PAYMENT CORRECTION ERROR:", err.message);
+    await writeAuditLog({
+      req,
+      module: "SMS",
+      action: "SEND_PAYMENT_CORRECTION",
+      targetType: "SMS",
+      accountName: req.body?.client?.AccountName || "",
+      status: "FAILED",
+      summary: "Payment correction SMS failed.",
+      details: {
+        error: err.message
+      },
+      values: {
+        client: req.body.client,
+        dueDate: req.body.dueDate
       }
     });
     res.status(500).json({ error: err.message });

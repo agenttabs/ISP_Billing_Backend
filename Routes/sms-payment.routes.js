@@ -19,4 +19,11 @@ router.post(
   controller.sendLatestPaymentReceivedSms
 );
 
+router.post(
+  "/sms/send-payment-correction",
+  protect,
+  authorize("ADMIN", "CASHIER"),
+  controller.sendPaymentCorrectionSms
+);
+
 module.exports = router;

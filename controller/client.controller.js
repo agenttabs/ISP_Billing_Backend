@@ -10,6 +10,11 @@ const { emitClientsChanged } = require("../services/realtime.service");
 
 const { addPPPoEUser, addIpoeDisconnectScheduler, checkPPPoEUser, clearIpoeLeaseComment, updatePPPoEUser, disconnectPPPoEUser, removePPPoEActiveConnection, addDisconnectScheduler, removeScheduler, getDhcpLeaseByMacAddress, getDhcpLeasesNoComment, getDhcpLeasesWithComments, setIpoeLeaseStatic, getClientMikrotikStatus } = require("../services/mikrotik");
 const { getDisconnectAfterDueDays } = require("../services/system-settings.service");
+const {
+  lookupOltFromDumpsByMac,
+  runLiveOnuDetails,
+  runLiveOltLookup
+} = require("../services/olt-telnet.service");
 
 
 
@@ -952,7 +957,7 @@ exports.getClientMikrotikStatus = async (req, res) => {
       macAddress: client.MacAddress || client.macAddress || ""
     });
 
-    res.json({
+    const response = {
       clientId: client._id,
       accountName: client.AccountName || "",
       clientName: client.ClientName || "",
@@ -963,10 +968,73 @@ exports.getClientMikrotikStatus = async (req, res) => {
         mikrotikStatus.macAddress ||
         String(client.MacAddress || client.macAddress || "").trim().toUpperCase(),
       status: mikrotikStatus.status || "UNKNOWN",
-      rxBytes: Number(mikrotikStatus.rxBytes || 0),
-      txBytes: Number(mikrotikStatus.txBytes || 0),
-      graphAvailable: Boolean(mikrotikStatus.graphAvailable)
-    });
+      pingAvailable: Boolean(mikrotikStatus.pingAvailable),
+      pingStatus: mikrotikStatus.pingStatus || "NO IP",
+      pingAverageMs: mikrotikStatus.pingAverageMs ?? null,
+      pingReceived: Number(mikrotikStatus.pingReceived || 0),
+      pingSent: Number(mikrotikStatus.pingSent || 0)
+    };
+
+    if (String(req.query?.includeOlt || "1") !== "0") {
+      try {
+        let oltLookup = lookupOltFromDumpsByMac(response.macAddress);
+        if (!oltLookup?.found) {
+          oltLookup = await runLiveOltLookup({
+            macAddress: response.macAddress,
+            authInfo: "",
+            technology: ""
+          });
+        } else {
+          const liveDetails = await runLiveOnuDetails({
+            onuPort: oltLookup.macMatch?.oltPort || oltLookup.onuMatch?.oltPort || "",
+            authInfo: oltLookup.onuMatch?.authInfo || "",
+            type: oltLookup.type || ""
+          });
+          oltLookup = {
+            ...oltLookup,
+            liveDetails
+          };
+        }
+        const oltPort = oltLookup.macMatch?.oltPort || oltLookup.onuMatch?.oltPort || "";
+        const liveDetails = oltLookup.liveDetails || {};
+        response.olt = {
+          status: liveDetails.status || oltLookup.onuMatch?.onuState || oltLookup.macMatch?.type || "",
+          port: oltPort,
+          type: String(oltPort).toUpperCase().startsWith("EPON-ONU")
+            ? "EPON"
+            : String(oltPort).toUpperCase().startsWith("GPON-ONU")
+              ? "GPON"
+              : oltLookup.type || "",
+          source: oltLookup.source || "LIVE_TELNET",
+          macAddress: oltLookup.macMatch?.macAddress || "",
+          vlan: oltLookup.macMatch?.vlan || "",
+          authInfo: oltLookup.onuMatch?.authInfo || "",
+          onuType: oltLookup.onuMatch?.onuType || "",
+          fiberRead: liveDetails.fiberRead || oltLookup.fiber?.fiberRead || "",
+          fiberStatus: liveDetails.fiberStatus || oltLookup.fiber?.fiberStatus || "",
+          fiberLength: liveDetails.fiberLength || "",
+          fiberCommand: liveDetails.fiberCommand || oltLookup.fiber?.fiberCommand || "",
+          error: liveDetails.error || oltLookup.fiber?.error || "",
+          commandsRun: liveDetails.commandsRun || oltLookup.commandsRun || []
+        };
+      } catch (oltErr) {
+        response.olt = {
+          status: "CHECK FAILED",
+          port: "",
+          macAddress: "",
+          vlan: "",
+          authInfo: "",
+          onuType: "",
+          fiberRead: "",
+          fiberStatus: "CHECK FAILED",
+          fiberCommand: "",
+          error: oltErr.message,
+          commandsRun: []
+        };
+      }
+    }
+
+    res.json(response);
   } catch (err) {
     console.error("CLIENT MIKROTIK STATUS ERROR:", err);
     res.status(500).json({ error: err.message });

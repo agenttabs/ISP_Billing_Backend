@@ -20,6 +20,7 @@ const collections = {
   systemSettings: process.env.SYSTEM_SETTINGS_COLLECTION || "SystemSettings",
   mikrotikChecker: process.env.MIKROTIK_CHECKER_COLLECTION || "MikrotikChecker",
   mikrotikDcBatch: process.env.MIKROTIK_DC_BATCH_COLLECTION || "MikrotikDcBatch",
+  oltDumpScheduler: process.env.OLT_DUMP_SCHEDULER_COLLECTION || "OltDumpScheduler",
   mikrotikDueDisconnectBatch:
     process.env.MIKROTIK_DUE_DISCONNECT_BATCH_COLLECTION || "MikrotikDueDisconnectBatch",
   systemLogs: process.env.SYSTEM_LOGS_COLLECTION || "SystemLogs",

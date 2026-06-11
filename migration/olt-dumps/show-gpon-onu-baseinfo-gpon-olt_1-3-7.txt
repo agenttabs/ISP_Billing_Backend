@@ -1,0 +1,28 @@
+
+OnuIndex            Type        Mode    AuthInfo                State
+-------------------------------------------------------------------------------
+gpon-onu_1/3/7:1    F670T       sn      SN:CMDCB00A5A8D         ready
+gpon-onu_1/3/7:2    F670T       sn      SN:CMDCB00A56E3         ready
+gpon-onu_1/3/7:3    F670T       sn      SN:CMDCB00A5048         ready
+gpon-onu_1/3/7:4    F670T       sn      SN:GMEGC21B7B30         ready
+gpon-onu_1/3/7:5    F670T       sn      SN:CMDCB00A8D28         ready
+gpon-onu_1/3/7:6    F670T       sn      SN:HWTC277505AF         ready
+gpon-onu_1/3/7:7    F670T       sn      SN:HWTC277A5A4D         ready
+gpon-onu_1/3/7:8    F670T       sn      SN:HWTC296F2E4F         ready
+gpon-onu_1/3/7:9    F670T       sn      SN:HWTC29902A97         ready
+gpon-onu_1/3/7:10   F980L       sn      SN:SKYW1A7CA28F         ready
+gpon-onu_1/3/7:11   F670T       sn      SN:ZTEGC442F2C4         ready
+gpon-onu_1/3/7:12   F670T       sn      SN:ZTEGC4340C65         ready
+gpon-onu_1/3/7:13   F670T       sn      SN:ZTEGC4EB7FDC         ready
+gpon-onu_1/3/7:14   F670T       sn      SN:ZTEGC8ED3594         ready
+gpon-onu_1/3/7:15   F670T       sn      SN:ZTEGC4ECA5A1         ready
+gpon-onu_1/3/7:16   F670T       sn      SN:ZTEGCF2B6F56         ready
+gpon-onu_1/3/7:17   F670T       sn      SN:ZTEGD394162A         ready
+gpon-onu_1/3/7:18   F670T       sn      SN:ZTEGCF56CE58         ready
+gpon-onu_1/3/7:19   F670T       sn      SN:ZTEGD44F0D7E         ready
+gpon-onu_1/3/7:20   F670T       sn      SN:ZTEGD44F0D80         ready
+gpon-onu_1/3/7:21   F670T       sn      SN:ZTEGD4A86E98         ready
+gpon-onu_1/3/7:22   F670T       sn      SN:CMDCA8219B78         ready
+gpon-onu_1/3/7:23   F670T       sn      SN:ZTEGC4ECD708         ready
+gpon-onu_1/3/7:24   F670T       sn      SN:ZTEGCE487D9B         ready
+ZXAN#

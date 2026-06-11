@@ -24,6 +24,8 @@ const mikrotikCheckerRoutes = require("./Routes/mikrotik-checker.routes");
 const mikrotikConnectionRoutes = require("./Routes/mikrotik-connection.routes");
 const mikrotikDcBatchRoutes = require("./Routes/mikrotik-dc-batch.routes");
 const mikrotikDueDisconnectBatchRoutes = require("./Routes/mikrotik-due-disconnect-batch.routes");
+const oltLookupRoutes = require("./Routes/olt-lookup.routes");
+const oltDumpSchedulerRoutes = require("./Routes/olt-dump-scheduler.routes");
 const { errorHandler } = require("./middleware/error.middleware");
 const { startEmailNotificationScheduler } = require("./services/email-notification.service");
 const { startSmsBatchScheduler } = require("./controller/sms-batch.controller");
@@ -32,6 +34,7 @@ const { startMikrotikDcBatchScheduler } = require("./services/mikrotik-dc-batch.
 const {
   startMikrotikDueDisconnectBatchScheduler
 } = require("./services/mikrotik-due-disconnect-batch.service");
+const { startOltDumpScheduler } = require("./services/olt-dump-scheduler.service");
 
 const app = express();
 const server = http.createServer(app);
@@ -85,6 +88,8 @@ app.use("/api", mikrotikCheckerRoutes);
 app.use("/api", mikrotikConnectionRoutes);
 app.use("/api", mikrotikDcBatchRoutes);
 app.use("/api", mikrotikDueDisconnectBatchRoutes);
+app.use("/api", oltLookupRoutes);
+app.use("/api", oltDumpSchedulerRoutes);
 app.use("/api/auth", authRoutes);
 
 // error handler
@@ -100,6 +105,7 @@ const startServer = async () => {
   startMikrotikCheckerScheduler();
   startMikrotikDcBatchScheduler();
   startMikrotikDueDisconnectBatchScheduler();
+  startOltDumpScheduler();
 
   initRealtime(server);
 

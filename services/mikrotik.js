@@ -1019,9 +1019,11 @@ const getClientMikrotikStatus = async ({
             status: "UNKNOWN",
             ipAddress: "",
             plan: "",
-            rxBytes: 0,
-            txBytes: 0,
-            graphAvailable: false
+            pingAvailable: false,
+            pingStatus: "NO IP",
+            pingAverageMs: null,
+            pingReceived: 0,
+            pingSent: 0
         };
     }
 
@@ -1036,6 +1038,65 @@ const getClientMikrotikStatus = async ({
 
     try {
         const conn = await client.connect();
+        const pingAddress = async (ipAddress) => {
+            const targetIp = String(ipAddress || "").trim();
+
+            if (!targetIp) {
+                return {
+                    pingAvailable: false,
+                    pingStatus: "NO IP",
+                    pingAverageMs: null,
+                    pingReceived: 0,
+                    pingSent: 0
+                };
+            }
+
+            try {
+                const rows = await conn
+                    .menu("/ping")
+                    .write([
+                        "/ping",
+                        `=address=${targetIp}`,
+                        "=count=3"
+                    ]);
+                const pingRows = Array.isArray(rows) ? rows : [];
+                const summaryRow =
+                    [...pingRows].reverse().find((row) =>
+                        row?.received !== undefined ||
+                        row?.sent !== undefined ||
+                        row?.["packet-loss"] !== undefined ||
+                        row?.["avg-rtt"] !== undefined
+                    ) || null;
+                const replyRows = pingRows.filter((row) => row?.time || row?.["time"]);
+                const sent = Number(summaryRow?.sent || pingRows.length || 3);
+                const received = Number(summaryRow?.received || replyRows.length || 0);
+                const averageSource =
+                    summaryRow?.["avg-rtt"] ||
+                    summaryRow?.avgRtt ||
+                    replyRows[replyRows.length - 1]?.time ||
+                    replyRows[replyRows.length - 1]?.["time"] ||
+                    "";
+                const averageMatch = String(averageSource).match(/[\d.]+/);
+                const averageMs = averageMatch ? Number(averageMatch[0]) : null;
+
+                return {
+                    pingAvailable: true,
+                    pingStatus: received > 0 ? "REACHABLE" : "UNREACHABLE",
+                    pingAverageMs: Number.isFinite(averageMs) ? averageMs : null,
+                    pingReceived: received,
+                    pingSent: sent
+                };
+            } catch (err) {
+                console.log(`MikroTik ping failed for ${targetIp}:`, err.message);
+                return {
+                    pingAvailable: false,
+                    pingStatus: "PING FAILED",
+                    pingAverageMs: null,
+                    pingReceived: 0,
+                    pingSent: 3
+                };
+            }
+        };
 
         if (normalizedAuthMode === "PPPOE") {
             const targetAccountName = String(accountName || "").trim();
@@ -1057,7 +1118,7 @@ const getClientMikrotikStatus = async ({
 
             const [secrets, activeUsers] = await Promise.all([
                 loadPppRows("/ppp/secret"),
-                Promise.resolve([])
+                loadPppRows("/ppp/active")
             ]);
 
             const secret = Array.isArray(secrets)
@@ -1065,19 +1126,37 @@ const getClientMikrotikStatus = async ({
                     (item) => String(item.name || "").trim() === targetAccountName
                 )
                 : null;
+            const activeUser = Array.isArray(activeUsers)
+                ? activeUsers.find(
+                    (item) => String(item.name || "").trim() === targetAccountName
+                )
+                : null;
 
             const plan = String(
                 secret?.profile || ""
             ).trim();
+            const activeIpAddress = String(
+                activeUser?.address ||
+                activeUser?.["remote-address"] ||
+                activeUser?.remoteAddress ||
+                ""
+            ).trim();
+            const activeMacAddress = String(
+                activeUser?.["caller-id"] ||
+                activeUser?.callerId ||
+                activeUser?.["mac-address"] ||
+                activeUser?.macAddress ||
+                ""
+            ).trim().toUpperCase();
+            const pingResult = await pingAddress(activeIpAddress);
 
             return {
                 authMode: normalizedAuthMode,
-                status: secret ? "FOUND_IN_SECRET" : "NOT FOUND",
-                ipAddress: "",
+                status: activeUser ? "ACTIVE" : secret ? "FOUND_IN_SECRET" : "NOT FOUND",
+                ipAddress: activeIpAddress,
                 plan,
-                rxBytes: 0,
-                txBytes: 0,
-                graphAvailable: false
+                macAddress: activeMacAddress,
+                ...pingResult
             };
         }
 
@@ -1113,18 +1192,18 @@ const getClientMikrotikStatus = async ({
                     status = "NOT ACTIVE";
                 }
             }
+            const leaseIpAddress = String(lease?.address || lease?.["active-address"] || "").trim();
+            const pingResult = await pingAddress(leaseIpAddress);
 
             return {
                 authMode: normalizedAuthMode,
                 status,
-                ipAddress: String(lease?.address || lease?.["active-address"] || "").trim(),
+                ipAddress: leaseIpAddress,
                 plan: String(planMatch?.[1] || "").trim(),
                 macAddress: String(
                     lease?.["mac-address"] || lease?.macAddress || macAddress || ""
                 ).trim().toUpperCase(),
-                rxBytes: 0,
-                txBytes: 0,
-                graphAvailable: false
+                ...pingResult
             };
         }
 
@@ -1133,9 +1212,11 @@ const getClientMikrotikStatus = async ({
             status: "UNKNOWN",
             ipAddress: "",
             plan: "",
-            rxBytes: 0,
-            txBytes: 0,
-            graphAvailable: false
+            pingAvailable: false,
+            pingStatus: "NO IP",
+            pingAverageMs: null,
+            pingReceived: 0,
+            pingSent: 0
         };
     } catch (err) {
         if (isRouterOsEmptyReplyError(err)) {
@@ -1145,9 +1226,11 @@ const getClientMikrotikStatus = async ({
                 status: "UNKNOWN",
                 ipAddress: "",
                 plan: "",
-                rxBytes: 0,
-                txBytes: 0,
-                graphAvailable: false
+                pingAvailable: false,
+                pingStatus: "PING FAILED",
+                pingAverageMs: null,
+                pingReceived: 0,
+                pingSent: 0
             };
         }
 
@@ -1359,6 +1442,25 @@ const getMikrotikCheckerSnapshot = async () => {
     }
 };
 
+const getPppActiveRows = async () => {
+    const server = await getMikrotikConfigAC();
+
+    const client = new RouterOSClient({
+        host: server.Address,
+        user: server.User,
+        password: server.Password,
+        port: getRouterOsPort(server.Port)
+    });
+
+    try {
+        const conn = await client.connect();
+        const activeUsers = await conn.menu("/ppp/active").getAll().catch(() => []);
+        return Array.isArray(activeUsers) ? activeUsers : [];
+    } finally {
+        client.close();
+    }
+};
+
 module.exports = {
     addPPPoEUser,
     addIpoeDisconnectScheduler,
@@ -1373,6 +1475,7 @@ module.exports = {
     setPPPoESecretDisconnected,
     getClientMikrotikStatus,
     getMikrotikCheckerSnapshot,
+    getPppActiveRows,
     updatePPPoEUser: updatePPPoEUserSafe,
     removePPPoEActiveConnection,
     disconnectPPPoEUser,

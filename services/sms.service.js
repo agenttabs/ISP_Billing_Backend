@@ -442,3 +442,64 @@ exports.sendPaymentReminderSms = async ({
     message
   });
 };
+
+exports.sendPaymentCorrectionSms = async ({
+  client,
+  dueDate,
+  subscriptionCover
+}) => {
+  const recipient = normalizeMobileNumber(client?.ContactNumber);
+
+  if (!recipient) {
+    return {
+      sent: false,
+      reason: "No client contact number."
+    };
+  }
+
+  const [gateway, template] = await Promise.all([
+    getSmsGatewayConfig(),
+    getSmsTemplateByType("paymentcorrection")
+  ]);
+
+  const gatewaySecret = gateway?.Secret || gateway?.secret || "";
+  const gatewayDevice =
+    gateway?.Device || gateway?.device || gateway?.Sim || gateway?.sim || "";
+
+  if (!gatewaySecret) {
+    return {
+      sent: false,
+      reason: "SMS gateway secret is missing."
+    };
+  }
+
+  if (!String(gatewayDevice).trim()) {
+    return {
+      sent: false,
+      reason: "SMS gateway device is missing."
+    };
+  }
+
+  if (!template?.Body) {
+    return {
+      sent: false,
+      reason: "paymentcorrection SMS template not found."
+    };
+  }
+
+  const companyName = await getCompanyName().catch(() => DEFAULT_COMPANY_NAME);
+  const message = replaceSmsTokens(template.Body, {
+    ClientName: client?.ClientName || client?.AccountName || "",
+    CompanyName: companyName,
+    AccountNumber: client?.AccountNumber || "",
+    SubscriptionCover: subscriptionCover || client?.SubscriptionCover || "",
+    DueDate: formatDate(dueDate),
+    NextDueDate: formatDate(dueDate),
+    MonthlyDue: formatPeso(client?.AmountDue || 0)
+  });
+
+  return sendSmsMessage({
+    recipient,
+    message
+  });
+};

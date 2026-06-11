@@ -1,0 +1,50 @@
+
+OnuIndex               OnlineStatus  OamStatus   RegMac    
+--------------------------------------------------------------------
+epon-onu_1/4/5:1       Online       complete     24:91:BB:3C:74:7E      
+epon-onu_1/4/5:2       Online       complete     04:E7:95:DC:52:6F      
+epon-onu_1/4/5:3       Online       complete     08:93:56:2E:92:BD      
+epon-onu_1/4/5:4       Online       complete     48:57:02:F1:B1:E8      
+epon-onu_1/4/5:5       Online       complete     50:70:97:4C:AC:3D      
+epon-onu_1/4/5:6       Online       complete     6C:16:32:8E:F1:0A      
+epon-onu_1/4/5:7       Online       complete     78:57:73:DC:8E:39      
+epon-onu_1/4/5:8       Online       complete     A4:7C:C9:06:41:49      
+epon-onu_1/4/5:9       Online       complete     B4:E4:6B:82:2E:F0      
+epon-onu_1/4/5:10      Online       complete     B4:E4:6B:8B:22:E8      
+epon-onu_1/4/5:11      Online       complete     B4:E4:6B:8E:88:CB      
+epon-onu_1/4/5:12      Online       complete     C4:0D:96:ED:93:99      
+epon-onu_1/4/5:13      Online       complete     C4:0D:96:EF:29:AC      
+epon-onu_1/4/5:14      Online       complete     D4:4F:67:C6:28:0D      
+epon-onu_1/4/5:15      Online       complete     D4:7E:A8:97:AB:D8      
+epon-onu_1/4/5:16      Online       complete     D4:7E:A8:EF:2B:C1      
+epon-onu_1/4/5:17      Online       complete     E0:CC:7A:58:0D:62      
+epon-onu_1/4/5:18      Online       complete     F4:79:60:20:46:C5      
+epon-onu_1/4/5:19      Online       complete     30:C5:0F:77:AE:87      
+epon-onu_1/4/5:20      Online       complete     10:A4:DA:56:D9:0B      
+epon-onu_1/4/5:21      Online       complete     24:91:BB:3B:8E:32      
+epon-onu_1/4/5:22      Online       complete     30:E9:8E:4E:21:85      
+epon-onu_1/4/5:23      Online       complete     44:9B:C1:74:ED:B8      
+epon-onu_1/4/5:24      Online       complete     54:DF:24:4C:23:F5      
+epon-onu_1/4/5:25      Online       complete     5C:64:7A:F3:B2:C6      
+epon-onu_1/4/5:26      Online       complete     60:F1:8A:EB:1A:83      
+epon-onu_1/4/5:27      Online       complete     70:8C:B6:E6:D4:C6      
+epon-onu_1/4/5:28      Online       complete     78:2E:56:35:D7:9B      
+epon-onu_1/4/5:29      Online       complete     B4:E4:6B:79:9B:98      
+epon-onu_1/4/5:30      Online       complete     8C:5F:AD:B1:44:D5      
+epon-onu_1/4/5:31      Online       complete     8C:E5:EF:45:F6:F3      
+epon-onu_1/4/5:32      Power Off    idle         00:00:00:00:00:00      
+epon-onu_1/4/5:33      Online       complete     A8:2B:CD:BE:A9:76      
+epon-onu_1/4/5:34      Online       complete     B0:EC:DD:8B:76:80      
+epon-onu_1/4/5:35      Online       complete     C0:FF:A8:BB:73:E6      
+epon-onu_1/4/5:36      Online       complete     CC:B1:82:B6:90:60      
+epon-onu_1/4/5:37      Online       complete     D4:4F:67:DF:F2:61      
+epon-onu_1/4/5:38      Online       complete     F8:6C:E1:68:E9:2B      
+epon-onu_1/4/5:39      Online       complete     FC:1B:D1:34:AC:69      
+epon-onu_1/4/5:40      Online       complete     CC:D7:3C:ED:66:D9      
+epon-onu_1/4/5:41      Online       complete     04:E7:95:DC:D7:94      
+epon-onu_1/4/5:42      Online       complete     BC:3F:8F:55:55:92      
+epon-onu_1/4/5:43      Online       complete     B4:E4:6B:81:20:90      
+epon-onu_1/4/5:44      Online       complete     24:91:BB:E5:28:8F      
+epon-onu_1/4/5:45      Online       complete     B4:E4:6B:89:67:5A      
+ONU Number: 44/45      
+ZXAN#

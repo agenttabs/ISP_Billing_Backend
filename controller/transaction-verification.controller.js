@@ -21,6 +21,28 @@ const normalizeReferenceValue = (value) =>
 const normalizeCommentValue = (value) => String(value || "").trim();
 const normalizeLookupValue = (value) => String(value || "").trim().toUpperCase();
 
+const getReceiptImageValue = (row, line = null) =>
+  line?.ReceiptImage ||
+  line?.receiptImage ||
+  line?.ReceiptImageDataUrl ||
+  line?.receiptImageDataUrl ||
+  line?.ReceiptImageUrl ||
+  line?.receiptImageUrl ||
+  row?.ReceiptImage ||
+  row?.receiptImage ||
+  row?.ReceiptImageDataUrl ||
+  row?.receiptImageDataUrl ||
+  row?.ReceiptImageUrl ||
+  row?.receiptImageUrl ||
+  "";
+
+const getReceiptImageStorageValue = (row, line = null) =>
+  line?.ReceiptImageStorage ||
+  line?.receiptImageStorage ||
+  row?.ReceiptImageStorage ||
+  row?.receiptImageStorage ||
+  "";
+
 const parseDateValue = (value) => {
   if (!value) return null;
 
@@ -167,6 +189,8 @@ const enrichEarningRowWithPrint = (row, printLookupById, printLookupByReference)
     PaymentDate: row?.PaymentDate || matchedPrint?.PaymentDate || "",
     PaymentReceipt: row?.PaymentReceipt || matchedPrint?.PaymentReceipt || "",
     Invoice: row?.Invoice || matchedPrint?.Invoice || "",
+    ReceiptImage: row?.ReceiptImage || matchedPrint?.ReceiptImage || "",
+    ReceiptImageStorage: row?.ReceiptImageStorage || matchedPrint?.ReceiptImageStorage || "",
     TransactionCode: row?.TransactionCode || matchedPrint?.TransactionCode || "",
     ClientName: row?.ClientName || matchedPrint?.ClientName || "",
     AccountNumber: row?.AccountNumber || matchedPrint?.AccountNumber || "",
@@ -221,6 +245,8 @@ const enrichPrintRowWithEarning = (row, earningLookup) => {
       (Array.isArray(matchedEarning?.PaymentBreakdown) && matchedEarning.PaymentBreakdown.length
         ? matchedEarning.PaymentBreakdown
         : row?.PaymentBreakdown) || [],
+    ReceiptImage: getReceiptImageValue(matchedEarning) || getReceiptImageValue(row),
+    ReceiptImageStorage: getReceiptImageStorageValue(matchedEarning) || getReceiptImageStorageValue(row),
     TransferDate:
       matchedEarning?.TransferDate ||
       matchedEarning?.GCashTransferDate ||
@@ -253,6 +279,8 @@ const getPaymentBreakdownLines = (row) => {
         Method: normalizeLineMethod(line?.Method || line?.PaymentMethod),
         Amount: Number(line?.Amount || 0),
         Reference: normalizeReferenceValue(line?.Reference),
+          ReceiptImage: getReceiptImageValue(row, line),
+          ReceiptImageStorage: getReceiptImageStorageValue(row, line),
           TransferDate: normalizeCommentValue(
             line?.TransferDate || line?.DateOfTransfer || line?.GCashTransferDate || row?.TransferDate || row?.GCashTransferDate
           ),
@@ -280,6 +308,8 @@ const getPaymentBreakdownLines = (row) => {
       Method: "CASH",
       Amount: cashAmount,
       Reference: "",
+      ReceiptImage: "",
+      ReceiptImageStorage: "",
       TransferDate: ""
     });
   }
@@ -289,6 +319,8 @@ const getPaymentBreakdownLines = (row) => {
       Method: "GCASH",
       Amount: gcashAmount,
       Reference: fallbackReference,
+        ReceiptImage: getReceiptImageValue(row),
+        ReceiptImageStorage: getReceiptImageStorageValue(row),
         TransferDate: normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate),
         ReceiverLast4: normalizeCommentValue(row?.ReceiverLast4 || row?.GCashReceiverLast4)
       });
@@ -299,6 +331,8 @@ const getPaymentBreakdownLines = (row) => {
       Method: paymentMethod,
       Amount: totalAmount,
       Reference: paymentMethod === "CASH" ? "" : fallbackReference,
+        ReceiptImage: paymentMethod === "CASH" ? "" : getReceiptImageValue(row),
+        ReceiptImageStorage: paymentMethod === "CASH" ? "" : getReceiptImageStorageValue(row),
         TransferDate:
           paymentMethod === "CASH"
             ? ""
@@ -315,6 +349,8 @@ const getPaymentBreakdownLines = (row) => {
       Method: "GCASH",
       Amount: totalAmount,
       Reference: fallbackReference,
+      ReceiptImage: getReceiptImageValue(row),
+      ReceiptImageStorage: getReceiptImageStorageValue(row),
       TransferDate: normalizeCommentValue(row?.TransferDate || row?.GCashTransferDate)
     });
   }
@@ -394,11 +430,16 @@ exports.getPendingTransactions = async (req, res) => {
             ClientName: 1,
             AccountNumber: 1,
             PaymentMethod: 1,
+            PaymentBreakdown: 1,
             MOP: 1,
             TransferDate: 1,
             GCashTransferDate: 1,
             ReceiverLast4: 1,
             GCashReceiverLast4: 1,
+            ReceiptImage: 1,
+            ReceiptImageStorage: 1,
+            ReceiptImageDataUrl: 1,
+            ReceiptImageUrl: 1,
             Verified: 1,
             VerifiedAt: 1,
             VerifiedBy: 1,
@@ -423,11 +464,20 @@ exports.getPendingTransactions = async (req, res) => {
       .map((row) => {
         const verificationLine = getVerificationLine(row);
         const paymentBreakdown = getPaymentBreakdownLines(row);
+        const receiptImage =
+          getReceiptImageValue(row, verificationLine) ||
+          paymentBreakdown.map((line) => getReceiptImageValue(row, line)).find(Boolean) ||
+          "";
 
         return {
           ...row,
           PaymentMethod: normalizePaymentMethod(row),
           PaymentBreakdown: paymentBreakdown,
+          ReceiptImage: receiptImage,
+          ReceiptImageStorage:
+            getReceiptImageStorageValue(row, verificationLine) ||
+            paymentBreakdown.map((line) => getReceiptImageStorageValue(row, line)).find(Boolean) ||
+            "",
           VerificationMethod: verificationLine?.Method || "",
           VerificationAmount: verificationLine?.Amount || 0,
           VerificationTransferDate:
