@@ -13,6 +13,12 @@ const normalizeStatus = (value) => {
 
 const getCollection = () => mongoose.connection.db.collection(collections.installations);
 
+const getLoggedInUser = (req) => ({
+  name: String(req.user?.name || req.user?.Name || "").trim(),
+  username: String(req.user?.username || req.user?.Username || "").trim(),
+  type: String(req.user?.type || req.user?.role || req.user?.Type || "").trim().toUpperCase()
+});
+
 exports.getInstallations = async (req, res) => {
   try {
     const search = String(req.query.search || "").trim();
@@ -46,6 +52,7 @@ exports.getInstallations = async (req, res) => {
 exports.saveInstallation = async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
+    const user = getLoggedInUser(req);
     const payload = {
       CustomerName: String(req.body.CustomerName || "").trim(),
       ContactNumber: String(req.body.ContactNumber || "").trim(),
@@ -63,10 +70,30 @@ exports.saveInstallation = async (req, res) => {
     }
 
     let resultId = id;
+    let previous = null;
 
     if (id) {
       if (!mongoose.Types.ObjectId.isValid(id)) {
         return res.status(400).json({ error: "Invalid installation id." });
+      }
+
+      previous = await getCollection().findOne({ _id: new mongoose.Types.ObjectId(id) });
+      if (!previous) {
+        return res.status(404).json({ error: "Installation record not found." });
+      }
+
+      const previousStatus = normalizeStatus(previous.Status);
+      if (payload.Status === "PENDING" && ["DONE", "CANCEL"].includes(previousStatus) && user.type !== "ADMIN") {
+        return res.status(403).json({ error: "Only admin can change Done or Cancel back to Pending." });
+      }
+
+      if (payload.Status !== previousStatus) {
+        payload.StatusChangedAt = new Date();
+        payload.StatusChangedBy = {
+          Name: user.name,
+          Username: user.username,
+          Type: user.type
+        };
       }
 
       await getCollection().updateOne(
@@ -74,6 +101,13 @@ exports.saveInstallation = async (req, res) => {
         { $set: payload }
       );
     } else {
+      payload.StatusChangedAt = new Date();
+      payload.StatusChangedBy = {
+        Name: user.name,
+        Username: user.username,
+        Type: user.type
+      };
+
       const result = await getCollection().insertOne({
         ...payload,
         createdAt: new Date()
