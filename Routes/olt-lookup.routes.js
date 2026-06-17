@@ -8,7 +8,7 @@ const router = express.Router();
 router.get(
   "/olt-lookup",
   protect,
-  authorize("ADMIN"),
+  authorize("ADMIN", "CASHIER"),
   controller.lookupOltClient
 );
 

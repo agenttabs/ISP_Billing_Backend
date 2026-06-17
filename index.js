@@ -5,6 +5,7 @@ const path = require("path");
 
 const connectDB = require("./config/db.runtime");
 const clientRoutes = require("./Routes/client.route");
+const installationRoutes = require("./Routes/installation.routes");
 const reportRoutes = require("./Routes/report.routes");
 const expenseRoutes = require("./Routes/expense.routes");
 const napRoutes = require("./Routes/nap.routes");
@@ -69,6 +70,7 @@ app.use(limiter);
 
 // routes
 app.use("/api", clientRoutes);
+app.use("/api", installationRoutes);
 app.use("/api", reportRoutes);
 app.use("/api", expenseRoutes);
 app.use("/api", napRoutes);
