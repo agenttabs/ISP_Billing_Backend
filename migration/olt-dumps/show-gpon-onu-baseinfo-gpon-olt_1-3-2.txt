@@ -106,4 +106,5 @@ gpon-onu_1/3/2:102  F670T       sn      SN:ZTEGCE5A62D7         ready
 gpon-onu_1/3/2:103  F670T       sn      SN:ZTEGCE5A8503         ready
 gpon-onu_1/3/2:104  F670T       sn      SN:HWTC2771070B         ready
 gpon-onu_1/3/2:105  F670T       sn      SN:ZTEGC4403BCA         ready
+gpon-onu_1/3/2:114  F670T       sn      SN:ZTEGC8C44D61         ready
 ZXAN#

@@ -10,7 +10,7 @@ epon-onu_1/5/2:6       Online       complete     24:91:BB:3F:40:49
 epon-onu_1/5/2:7       Online       complete     28:68:D2:BF:3E:31      
 epon-onu_1/5/2:8       Online       complete     30:C5:0F:D8:69:75      
 epon-onu_1/5/2:9       Online       complete     30:C5:0F:D8:9E:EA      
-epon-onu_1/5/2:10      Power Off    idle         00:00:00:00:00:00      
+epon-onu_1/5/2:10      Online       complete     50:5D:AC:29:78:1E      
 epon-onu_1/5/2:11      Online       complete     54:DF:24:4C:A6:48      
 epon-onu_1/5/2:12      Online       complete     68:4A:AE:E8:D2:65      
 epon-onu_1/5/2:13      Online       complete     60:12:3C:F0:E9:D1      
@@ -39,5 +39,5 @@ epon-onu_1/5/2:35      Online       complete     F8:6C:E1:6A:C5:4E
 epon-onu_1/5/2:36      Online       complete     F8:6C:E1:7D:05:CA      
 epon-onu_1/5/2:37      Online       complete     F8:6C:E1:88:79:66      
 epon-onu_1/5/2:38      Online       complete     B4:E4:6B:6F:53:58      
-ONU Number: 36/38      
+ONU Number: 37/38      
 ZXAN#

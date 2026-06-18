@@ -780,6 +780,9 @@ exports.refreshClientPppoeMode = async (req, res) => {
 exports.createRepairRequest = async (req, res) => {
   try {
     const id = req.params.id;
+    const technicianIds = Array.isArray(req.body.technicianIds)
+      ? req.body.technicianIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
     const technicianId = String(req.body.technicianId || "").trim();
     const technicianNameInput = String(req.body.technicianName || "").trim();
     const repairText = String(
@@ -792,7 +795,7 @@ exports.createRepairRequest = async (req, res) => {
       return res.status(400).json({ error: "Invalid client id." });
     }
 
-    if (!technicianId && !technicianNameInput) {
+    if (!technicianIds.length && !technicianId && !technicianNameInput) {
       return res.status(400).json({ error: "Technician is required." });
     }
 
@@ -812,102 +815,152 @@ exports.createRepairRequest = async (req, res) => {
       collections.credentials
     );
 
-    const technician = technicianId
-      ? await credentialCollection.findOne({ ID: technicianId })
-      : await credentialCollection.findOne({ Name: technicianNameInput });
+    const selectedTechnicians = technicianIds.length
+      ? (await credentialCollection.find({}).toArray())
+          .filter((technician) => technicianIds.includes(String(technician.ID || "").trim()))
+          .sort(
+            (a, b) =>
+              technicianIds.indexOf(String(a.ID || "").trim()) -
+              technicianIds.indexOf(String(b.ID || "").trim())
+          )
+      : [
+          technicianId
+            ? (await credentialCollection.find({}).toArray()).find(
+                (technician) => String(technician.ID || "").trim() === technicianId
+              )
+            : await credentialCollection.findOne({ Name: technicianNameInput })
+        ].filter(Boolean);
 
-    if (!technician) {
+    if (!selectedTechnicians.length) {
       return res.status(404).json({ error: "Technician not found." });
     }
 
-    const technicianType = String(technician.Type || "").trim().toUpperCase();
-    if (!["TECHNICIAN", "EMPLOYEE"].includes(technicianType)) {
+    const invalidTechnician = selectedTechnicians.find((technician) => {
+      const technicianType = String(technician.Type || "").trim().toUpperCase();
+      return !["TECHNICIAN", "EMPLOYEE"].includes(technicianType);
+    });
+
+    if (invalidTechnician) {
       return res.status(400).json({ error: "Selected user is not a technician." });
     }
 
-    const technicianContact = String(
-      technician.Contact || technician.contact || ""
-    ).trim();
-
-    const repairRequest = {
-      clientId: String(client._id),
-      accountName: client.AccountName || "",
-      clientName: client.ClientName || "",
-      accountNumber: client.AccountNumber || "",
-      contactNumber: client.ContactNumber || "",
-      address: client.Address || "",
-      technicianId: String(technician.ID || technicianId || "").trim(),
-      technicianName: String(technician.Name || technicianNameInput || "").trim(),
-      technicianUsername: String(technician.Username || "").trim(),
-      technicianContact,
-      repairText,
-      smsMessage: smsMessageOverride,
-      createdAt: new Date()
+    const createdBy = {
+      name: String(req.user?.name || req.user?.Name || "").trim(),
+      username: String(req.user?.username || req.user?.Username || "").trim(),
+      type: String(req.user?.type || req.user?.role || req.user?.Type || "").trim().toUpperCase()
     };
 
-    const smsMessage = smsMessageOverride || (repairTemplate?.Body
-      ? replaceSmsTokens(repairTemplate.Body, {
-          TechnicianName: repairRequest.technicianName || "",
-          ClientName: repairRequest.clientName || repairRequest.accountName || "",
-          AccountName: repairRequest.accountName || "",
-          AccountNumber: repairRequest.accountNumber || "",
-          ContactNumber: repairRequest.contactNumber || "",
-          Address: repairRequest.address || "",
-          RepairText: repairRequest.repairText || "",
-          Issue: repairRequest.repairText || ""
-        })
-      : [
-          "DNS Repair Request",
-          `Technician: ${repairRequest.technicianName || "-"}`,
-          `Client: ${repairRequest.clientName || repairRequest.accountName || "-"}`,
-          `Account: ${repairRequest.accountName || "-"}`,
-          `Contact: ${repairRequest.contactNumber || "-"}`,
-          `Address: ${repairRequest.address || "-"}`,
-          `Issue: ${repairRequest.repairText}`
-        ].join("\n"));
+    const createdRepairRequests = [];
+    const repairCollection = mongoose.connection.db.collection(collections.repairs);
+    const repairGroupId = new mongoose.Types.ObjectId().toString();
 
-    let smsResult;
-    try {
-      smsResult = await sendDirectSms({
-        recipient: technicianContact,
-        message: smsMessage
-      });
-    } catch (smsError) {
-      smsResult = {
-        sent: false,
-        reason: smsError.message || "SMS gateway request failed."
+    for (const technician of selectedTechnicians) {
+      const technicianContact = String(technician.Contact || technician.contact || "").trim();
+      const repairRequest = {
+        clientId: String(client._id),
+        accountName: client.AccountName || "",
+        clientName: client.ClientName || "",
+        accountNumber: client.AccountNumber || "",
+        contactNumber: client.ContactNumber || "",
+        address: client.Address || "",
+        technicianId: String(technician.ID || "").trim(),
+        technicianName: String(technician.Name || "").trim(),
+        technicianUsername: String(technician.Username || "").trim(),
+        technicianContact,
+        repairText,
+        smsMessage: smsMessageOverride,
+        createdAt: new Date()
       };
+
+      const smsMessage = smsMessageOverride || (repairTemplate?.Body
+        ? replaceSmsTokens(repairTemplate.Body, {
+            TechnicianName: repairRequest.technicianName || "",
+            ClientName: repairRequest.clientName || repairRequest.accountName || "",
+            AccountName: repairRequest.accountName || "",
+            AccountNumber: repairRequest.accountNumber || "",
+            ContactNumber: repairRequest.contactNumber || "",
+            Address: repairRequest.address || "",
+            RepairText: repairRequest.repairText || "",
+            Issue: repairRequest.repairText || ""
+          })
+        : [
+            "DNS Repair Request",
+            `Technician: ${repairRequest.technicianName || "-"}`,
+            `Client: ${repairRequest.clientName || repairRequest.accountName || "-"}`,
+            `Account: ${repairRequest.accountName || "-"}`,
+            `Contact: ${repairRequest.contactNumber || "-"}`,
+            `Address: ${repairRequest.address || "-"}`,
+            `Issue: ${repairRequest.repairText}`
+          ].join("\n"));
+
+      let smsResult;
+      try {
+        smsResult = await sendDirectSms({
+          recipient: technicianContact,
+          message: smsMessage
+        });
+      } catch (smsError) {
+        smsResult = {
+          sent: false,
+          reason: smsError.message || "SMS gateway request failed."
+        };
+      }
+
+      const repairDocument = {
+        ...repairRequest,
+        repairDetails: smsMessage,
+        repairGroupId,
+        status: "PENDING",
+        source: "CLIENT_REPAIR_SMS",
+        smsSent: Boolean(smsResult?.sent),
+        smsStatus: smsResult?.sent ? "SENT" : "FAILED",
+        smsReason: smsResult?.reason || "",
+        smsResult,
+        createdBy
+      };
+
+      const repairInsert = await repairCollection.insertOne(repairDocument);
+      const repairId = String(repairInsert.insertedId);
+      const savedRepair = {
+        _id: repairId,
+        ...repairDocument
+      };
+
+      createdRepairRequests.push(savedRepair);
+
+      await writeAuditLog({
+        req,
+        module: "REPAIR",
+        action: "SEND_REQUEST",
+        targetType: "REPAIR",
+        targetId: repairId,
+        accountName: client.AccountName || "",
+        status: smsResult?.sent ? "SUCCESS" : "FAILED",
+        summary: smsResult?.sent
+          ? "Repair request SMS sent."
+          : "Repair request SMS failed.",
+        details: {
+          clientId: String(client._id),
+          dueDate: client.DueDate || "",
+          authenticationMode: client.AuthenticationMode || "",
+          netPlan: client.NetPlan || client.Profile || "",
+          templateType: "smsRepairTech",
+          templateFound: Boolean(repairTemplate?.Body),
+          smsResult
+        },
+        values: repairRequest
+      });
     }
 
-    await writeAuditLog({
-      req,
-      module: "REPAIR",
-      action: "SEND_REQUEST",
-      targetType: "REPAIR",
-      targetId: `${id}-${Date.now()}`,
-      accountName: client.AccountName || "",
-      status: smsResult?.sent ? "SUCCESS" : "FAILED",
-      summary: smsResult?.sent
-        ? "Repair request SMS sent."
-        : "Repair request SMS failed.",
-      details: {
-        clientId: String(client._id),
-        dueDate: client.DueDate || "",
-        authenticationMode: client.AuthenticationMode || "",
-        netPlan: client.NetPlan || client.Profile || "",
-        templateType: "smsRepairTech",
-        templateFound: Boolean(repairTemplate?.Body),
-        smsResult
-      },
-      values: repairRequest
-    });
+    const sentCount = createdRepairRequests.filter((item) => item.smsSent).length;
 
     return res.status(201).json({
-      message: smsResult?.sent
-        ? "Repair request SMS sent successfully."
-        : smsResult?.reason || "Repair request SMS failed.",
-      repairRequest,
-      smsResult
+      message: sentCount > 0
+        ? `Repair request SMS sent to ${sentCount} technician(s).`
+        : "Repair request SMS failed.",
+      repairRequests: createdRepairRequests,
+      repairRequest: createdRepairRequests[0] || null,
+      smsResult: createdRepairRequests[0]?.smsResult || null
     });
   } catch (err) {
     console.error("REPAIR REQUEST ERROR:", err);

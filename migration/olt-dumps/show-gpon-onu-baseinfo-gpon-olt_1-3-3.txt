@@ -18,8 +18,11 @@ gpon-onu_1/3/3:14   F670T       sn      SN:HWTC276D6C7C         ready
 gpon-onu_1/3/3:15   F670T       sn      SN:HWTC2776C9A1         ready
 gpon-onu_1/3/3:16   F980L       sn      SN:SKYW1A203DB6         ready
 gpon-onu_1/3/3:17   F670T       sn      SN:HWTC277C9BA9         ready
-gpon-onu_1/3/3:18   F670T       sn      SN:ZTEGC8C44D61         ready
+gpon-onu_1/3/3:18   F670T       sn      SN:ZTEGC433BA7F         ready
 gpon-onu_1/3/3:19   F670T       sn      SN:ZTEGD4A84B66         ready
 gpon-onu_1/3/3:20   F670T       sn      SN:HWTC278B95CB         ready
 gpon-onu_1/3/3:21   F670T       sn      SN:HWTC277916F0         ready
+gpon-onu_1/3/3:22   F670T       sn      SN:ZTEGC4EF8AF8         ready
+gpon-onu_1/3/3:23   F670T       sn      SN:ZTEGCCE10063         ready
+gpon-onu_1/3/3:24   F670T       sn      SN:ZTEGCE487F00         ready
 ZXAN#

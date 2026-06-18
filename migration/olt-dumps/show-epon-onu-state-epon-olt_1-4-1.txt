@@ -35,6 +35,6 @@ epon-onu_1/4/1:31      Online       complete     A4:7C:C9:11:67:6F
 epon-onu_1/4/1:32      Online       complete     CC:B1:82:B6:21:26      
 epon-onu_1/4/1:33      Online       complete     CC:B1:82:B7:C6:8F      
 epon-onu_1/4/1:34      Online       complete     78:57:73:61:EE:AA      
-epon-onu_1/4/1:35      Online       complete     CC:B1:82:B6:61:B2      
-ONU Number: 35/35      
+epon-onu_1/4/1:35      Power Off    idle         00:00:00:00:00:00      
+ONU Number: 34/35      
 ZXAN#

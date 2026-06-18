@@ -51,5 +51,7 @@ epon-onu_1/4/4:47      Online       complete     8C:E5:EF:46:B1:49
 epon-onu_1/4/4:48      Online       complete     94:25:33:B5:A5:D0      
 epon-onu_1/4/4:49      Online       complete     A4:BE:2B:2A:8F:05      
 epon-onu_1/4/4:50      Online       complete     F4:E5:F2:BA:28:D3      
-ONU Number: 50/50      
+epon-onu_1/4/4:51      Online       complete     78:57:73:61:0F:BD      
+epon-onu_1/4/4:52      Offline      idle         00:00:00:00:00:00      
+ONU Number: 51/52      
 ZXAN#

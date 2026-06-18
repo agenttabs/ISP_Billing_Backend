@@ -8,6 +8,10 @@ const normalizeStatus = (value) => {
     return "CANCEL";
   }
 
+  if (status === "ONGOING" || status === "ON GOING") {
+    return "ONGOING";
+  }
+
   return status === "DONE" ? "DONE" : "PENDING";
 };
 
@@ -19,14 +23,34 @@ const getLoggedInUser = (req) => ({
   type: String(req.user?.type || req.user?.role || req.user?.Type || "").trim().toUpperCase()
 });
 
+const getManilaDateKey = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const normalizeComparable = (value) => String(value || "").trim();
+
 exports.getInstallations = async (req, res) => {
   try {
     const search = String(req.query.search || "").trim();
     const status = String(req.query.status || "ALL").trim().toUpperCase();
+    const user = getLoggedInUser(req);
     const filter = {};
 
     if (status !== "ALL") {
       filter.Status = normalizeStatus(status);
+    }
+
+    if (user.type === "TECHNICIAN") {
+      const today = getManilaDateKey();
+      filter.InstallationDate = { $regex: `^${today}` };
     }
 
     if (search) {
@@ -83,8 +107,23 @@ exports.saveInstallation = async (req, res) => {
       }
 
       const previousStatus = normalizeStatus(previous.Status);
+      if (previousStatus === "ONGOING" && !["ONGOING", "DONE", "CANCEL"].includes(payload.Status)) {
+        return res.status(403).json({ error: "Ongoing installation can only be changed to Done or Cancel." });
+      }
+
       if (payload.Status === "PENDING" && ["DONE", "CANCEL"].includes(previousStatus) && user.type !== "ADMIN") {
         return res.status(403).json({ error: "Only admin can change Done or Cancel back to Pending." });
+      }
+
+      if (user.type === "TECHNICIAN") {
+        const lockedFields = ["CustomerName", "ContactNumber", "Address", "Plan", "TransferDate", "Note"];
+        const changedLockedField = lockedFields.some(
+          (field) => normalizeComparable(payload[field]) !== normalizeComparable(previous[field])
+        );
+
+        if (changedLockedField) {
+          return res.status(403).json({ error: "Technician can only reschedule installation date or change status." });
+        }
       }
 
       if (payload.Status !== previousStatus) {

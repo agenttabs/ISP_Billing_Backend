@@ -1,7 +1,7 @@
 
 OnuIndex            Type        Mode    AuthInfo                State
 -------------------------------------------------------------------------------
-gpon-onu_1/3/8:1    F670T       sn      SN:GMEGC20B73A8         ready
+gpon-onu_1/3/8:1    F670T       sn      SN:ZTEGCE486E3B         ready
 gpon-onu_1/3/8:2    F670T       sn      SN:CMDCA1088925         ready
 gpon-onu_1/3/8:3    F670T       sn      SN:CMDCA8A2965C         ready
 gpon-onu_1/3/8:4    F670T       sn      SN:HWTC27670288         ready
@@ -88,4 +88,5 @@ gpon-onu_1/3/8:84   F670T       sn      SN:HWTC275C0D15         ready
 gpon-onu_1/3/8:85   F670T       sn      SN:ZTEGD3802AF7         ready
 gpon-onu_1/3/8:86   F980L       sn      SN:SKYW1AF56B37         ready
 gpon-onu_1/3/8:87   F670T       sn      SN:ZTEGC4EA3753         ready
+gpon-onu_1/3/8:88   F670T       sn      SN:HWTC276A02B4         ready
 ZXAN#

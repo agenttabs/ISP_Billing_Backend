@@ -25,7 +25,7 @@ epon-onu_1/4/6:21      Online       complete     B4:E4:6B:8E:9D:D8
 epon-onu_1/4/6:22      Online       complete     C0:F6:C2:9E:50:43      
 epon-onu_1/4/6:23      Power Off    idle         00:00:00:00:00:00      
 epon-onu_1/4/6:24      Online       complete     F8:6C:E1:5F:8A:65      
-epon-onu_1/4/6:25      Online       complete     D4:4F:67:DF:CB:BB      
+epon-onu_1/4/6:25      Power Off    idle         00:00:00:00:00:00      
 epon-onu_1/4/6:26      Online       complete     F8:6C:E1:82:CC:34      
 epon-onu_1/4/6:27      Online       complete     08:93:56:07:BD:E4      
 epon-onu_1/4/6:28      Online       complete     04:E7:95:DB:34:B0      
@@ -50,5 +50,5 @@ epon-onu_1/4/6:46      Online       complete     D4:46:49:F9:7E:B0
 epon-onu_1/4/6:47      Online       complete     EC:C0:1B:2B:F6:B9      
 epon-onu_1/4/6:48      Online       complete     F0:3F:95:26:3F:BF      
 epon-onu_1/4/6:49      Online       complete     28:68:D2:BF:DB:60      
-ONU Number: 48/49      
+ONU Number: 47/49      
 ZXAN#

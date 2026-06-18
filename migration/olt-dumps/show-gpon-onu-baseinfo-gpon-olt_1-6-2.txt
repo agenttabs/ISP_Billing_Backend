@@ -103,4 +103,7 @@ gpon-onu_1/6/2:99   F670T       sn      SN:CMDCB00A183E         ready
 gpon-onu_1/6/2:100  F670T       sn      SN:CMDCA869FC41         ready
 gpon-onu_1/6/2:101  F670T       sn      SN:ZTEGC433E094         ready
 gpon-onu_1/6/2:102  F670T       sn      SN:HWTC33E671AF         ready
+gpon-onu_1/6/2:103  F670T       sn      SN:CMDCB00A24D9         ready
+gpon-onu_1/6/2:104  F670T       sn      SN:HWTC27721C77         ready
+gpon-onu_1/6/2:105  F670T       sn      SN:GMEGC20B73A8         ready
 ZXAN#

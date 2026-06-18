@@ -53,4 +53,6 @@ gpon-onu_1/3/5:49   F670T       sn      SN:ZTEGC4463910         ready
 gpon-onu_1/3/5:50   F670T       sn      SN:ZTEGC4B8EC3E         ready
 gpon-onu_1/3/5:51   F670T       sn      SN:ZTEGC4EF561F         ready
 gpon-onu_1/3/5:52   F670T       sn      SN:ZTEGCE8098A9         ready
+gpon-onu_1/3/5:53   F670T       sn      SN:HWTCA3ADEDA5         ready
+gpon-onu_1/3/5:54   F670T       sn      SN:HWTCCF19FEA6         ready
 ZXAN#

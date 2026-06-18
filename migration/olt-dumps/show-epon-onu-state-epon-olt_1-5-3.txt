@@ -16,7 +16,6 @@ epon-onu_1/5/3:12      Online       complete     E0:CC:7A:E1:95:8B
 epon-onu_1/5/3:13      Online       complete     B4:E4:6B:8F:02:A7      
 epon-onu_1/5/3:14      Online       complete     FC:1B:D1:48:32:32      
 epon-onu_1/5/3:15      Online       complete     FC:1B:D1:75:A9:99      
-epon-onu_1/5/3:16      Online       complete     30:C5:0F:9F:41:42      
 epon-onu_1/5/3:17      Online       complete     08:79:8C:B6:F7:47      
 epon-onu_1/5/3:18      Online       complete     08:93:56:31:26:7C      
 epon-onu_1/5/3:19      Online       complete     30:C5:0F:D8:72:D2      
@@ -29,5 +28,6 @@ epon-onu_1/5/3:25      Online       complete     CC:B1:82:B6:65:AE
 epon-onu_1/5/3:26      Online       complete     F8:6E:EE:C1:13:E2      
 epon-onu_1/5/3:27      Online       complete     D4:4F:67:CB:B4:E2      
 epon-onu_1/5/3:28      Online       complete     CC:B1:82:B6:6C:B8      
+epon-onu_1/5/3:30      Online       complete     A4:16:E7:B8:A0:58      
 ONU Number: 27/28      
 ZXAN#

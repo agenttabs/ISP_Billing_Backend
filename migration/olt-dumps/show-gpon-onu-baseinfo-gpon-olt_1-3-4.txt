@@ -58,4 +58,7 @@ gpon-onu_1/3/4:54   F670T       sn      SN:CMDCB00A8E6A         ready
 gpon-onu_1/3/4:55   F670T       sn      SN:ZTEGC442EB57         ready
 gpon-onu_1/3/4:56   F670T       sn      SN:HWTC2768CBF8         ready
 gpon-onu_1/3/4:57   F670T       sn      SN:HWTC277334D8         ready
+gpon-onu_1/3/4:58   F670T       sn      SN:ZTEGC4EFAE40         ready
+gpon-onu_1/3/4:59   F670T       sn      SN:CMDCA8195028         ready
+gpon-onu_1/3/4:60   F670T       sn      SN:HWTCCD791AA6         ready
 ZXAN#

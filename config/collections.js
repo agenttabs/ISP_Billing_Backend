@@ -14,6 +14,7 @@ const collections = {
   clients: process.env.CLIENTS_COLLECTION || "clients",
   netPlans: process.env.NETPLANS_COLLECTION || "NetPlan",
   installations: process.env.INSTALLATIONS_COLLECTION || "Installations",
+  repairs: process.env.REPAIRS_COLLECTION || "Repairs",
   servers: process.env.SERVERS_COLLECTION || "Servers",
   credentials: process.env.CREDENTIALS_COLLECTION || "credential",
   emailNotification: process.env.EMAIL_NOTIFICATION_COLLECTION || "EmailNotification",

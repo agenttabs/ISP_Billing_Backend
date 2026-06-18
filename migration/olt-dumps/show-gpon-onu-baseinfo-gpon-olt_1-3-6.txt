@@ -80,4 +80,6 @@ gpon-onu_1/3/6:76   F670T       sn      SN:HWTC2776AD64         ready
 gpon-onu_1/3/6:77   F670T       sn      SN:ZTEGD101414E         ready
 gpon-onu_1/3/6:78   F670T       sn      SN:ZTEGC4ECD466         ready
 gpon-onu_1/3/6:79   F670T       sn      SN:HWTC27801856         ready
+gpon-onu_1/3/6:80   F670T       sn      SN:HWTC90EC17A8         ready
+gpon-onu_1/3/6:81   F670T       sn      SN:HWTC27734BCA         ready
 ZXAN#
