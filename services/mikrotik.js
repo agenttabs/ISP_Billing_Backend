@@ -353,6 +353,26 @@ const addDisconnectScheduler = async ({ username, dueDate, location }) => {
 
         console.log("🚀 Creating Scheduler:", schedulerName, date);
 
+        let existingSchedulers = [];
+        try {
+            const schedulers = await conn.menu("/system/scheduler").getAll();
+            existingSchedulers = schedulers.filter((item) => item.name === schedulerName);
+        } catch {
+            existingSchedulers = [];
+        }
+
+        for (const existing of existingSchedulers) {
+            const schedulerId = existing.id || existing[".id"];
+            if (!schedulerId) continue;
+
+            try {
+                await conn.menu("/system/scheduler").remove(schedulerId);
+                console.log("Removed existing PPPoE scheduler before add:", schedulerName);
+            } catch (err) {
+                console.log("Skip existing PPPoE scheduler remove before add:", schedulerName, err?.message);
+            }
+        }
+
         await conn.menu("/system/scheduler").add({
             name: schedulerName,
             start_date: date,

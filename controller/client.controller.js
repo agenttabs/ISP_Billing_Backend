@@ -367,6 +367,18 @@ exports.updateClient = async (req, res) => {
     const id = req.params.id;
 
     // 🔥 get old client data
+    const bodyId = String(req.body?._id || "").trim();
+
+    if (bodyId && bodyId !== id) {
+      return res.status(409).json({
+        error: "Client update blocked because the form data does not match the selected client. Please reopen the client and try again.",
+        details: {
+          routeClientId: id,
+          bodyClientId: bodyId
+        }
+      });
+    }
+
     const oldClient = await mongoose.connection.db
       .collection(collections.clients)
       .findOne({ _id: new mongoose.Types.ObjectId(id) });
@@ -377,6 +389,13 @@ exports.updateClient = async (req, res) => {
 
     const actor = getRequestActor(req);
     const { _id, ...updateData } = req.body;
+    console.log("CLIENT UPDATE REQUEST TARGET:", {
+      routeClientId: id,
+      bodyClientId: bodyId || "",
+      dbAccountName: oldClient.AccountName || "",
+      bodyAccountName: updateData.AccountName || "",
+      updatedBy: actor.display || ""
+    });
     delete updateData.CreatedBy;
     delete updateData.CreatedById;
     delete updateData.Cashier;
@@ -601,6 +620,11 @@ exports.updateClient = async (req, res) => {
       ].filter(Boolean);
 
       for (const schedulerName of [...new Set(schedulerNamesToRemove)]) {
+        console.log("MIKROTIK SCHEDULER REMOVE TARGET:", {
+          clientId: id,
+          schedulerName,
+          updatedBy: actor.display || ""
+        });
         await removeScheduler({
           username: schedulerName,
           location: updateData.ServerLocation || oldClient.ServerLocation
@@ -617,6 +641,13 @@ exports.updateClient = async (req, res) => {
       if (nextAmountDue > 0) {
         if (nextAuthMode === "IPOE") {
           if (!nextIsDisconnectedPlan) {
+            console.log("MIKROTIK IPOE SCHEDULER ADD TARGET:", {
+              clientId: id,
+              username: nextAccountName,
+              dueDate: nextDueDate,
+              macAddress: nextMacAddress,
+              updatedBy: actor.display || ""
+            });
             await addIpoeDisconnectScheduler({
               username: nextAccountName,
               dueDate: nextDueDate,
@@ -625,6 +656,12 @@ exports.updateClient = async (req, res) => {
             });
           }
         } else {
+          console.log("MIKROTIK PPPOE SCHEDULER ADD TARGET:", {
+            clientId: id,
+            username: nextAccountName,
+            dueDate: nextDueDate,
+            updatedBy: actor.display || ""
+          });
           await addDisconnectScheduler({
             username: nextAccountName,
             dueDate: nextDueDate,
@@ -689,6 +726,17 @@ exports.getNetPlans = async (req, res) => {
 exports.adjustClientDueDate = async (req, res) => {
   try {
     const id = req.params.id;
+    const bodyId = String(req.body?._id || "").trim();
+
+    if (bodyId && bodyId !== id) {
+      return res.status(409).json({
+        error: "Client update blocked because the form data does not match the selected client. Please reopen the client and try again.",
+        details: {
+          routeClientId: id,
+          bodyClientId: bodyId
+        }
+      });
+    }
     const dueDate = req.body.DueDate;
     const subscriptionCover = req.body.SubscriptionCover;
     const actor = getRequestActor(req);
@@ -747,6 +795,11 @@ exports.adjustClientDueDate = async (req, res) => {
       updatedBy: actor.display || ""
     });
 
+    console.log("MIKROTIK DUE-DATE SCHEDULER REMOVE TARGET:", {
+      clientId: id,
+      schedulerName: accountName,
+      updatedBy: actor.display || ""
+    });
     await removeScheduler({
       username: accountName,
       location: serverLocation
@@ -761,6 +814,13 @@ exports.adjustClientDueDate = async (req, res) => {
           .toUpperCase();
 
         if (macAddress) {
+          console.log("MIKROTIK DUE-DATE IPOE SCHEDULER ADD TARGET:", {
+            clientId: id,
+            username: accountName,
+            dueDate,
+            macAddress,
+            updatedBy: actor.display || ""
+          });
           await addIpoeDisconnectScheduler({
             username: accountName,
             dueDate,
@@ -769,6 +829,12 @@ exports.adjustClientDueDate = async (req, res) => {
           });
         }
       } else if (authMode === "PPPOE") {
+        console.log("MIKROTIK DUE-DATE PPPOE SCHEDULER ADD TARGET:", {
+          clientId: id,
+          username: accountName,
+          dueDate,
+          updatedBy: actor.display || ""
+        });
         await addDisconnectScheduler({
           username: accountName,
           dueDate,
