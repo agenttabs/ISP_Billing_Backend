@@ -50,6 +50,18 @@ const parseAmountValue = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const getRequestActor = (req) => {
+  const actorId = String(req.user?.id || req.user?._id || req.user?.ID || "").trim();
+  const actorName = String(
+    req.user?.name || req.user?.Name || req.user?.username || req.user?.Username || ""
+  ).trim();
+
+  return {
+    id: actorId,
+    display: actorName || actorId
+  };
+};
+
 const PPP_DISCONNECTED_PROFILE = "dc-putol";
 
 const MANILA_TIMEZONE = "Asia/Manila";
@@ -363,7 +375,17 @@ exports.updateClient = async (req, res) => {
       return res.status(404).json({ error: "Client not found" });
     }
 
+    const actor = getRequestActor(req);
     const { _id, ...updateData } = req.body;
+    delete updateData.CreatedBy;
+    delete updateData.CreatedById;
+    delete updateData.Cashier;
+    delete updateData.CashierId;
+    delete updateData.DeclaredBy;
+    delete updateData.DeclaredById;
+    delete updateData.UpdatedBy;
+    delete updateData.UpdatedById;
+    delete updateData.LastUpdatedBy;
     delete updateData.macAddress;
     let normalizedMacAddress =
       updateData.MacAddress || updateData.macAddress || oldClient.MacAddress || oldClient.macAddress || "";
@@ -432,6 +454,10 @@ exports.updateClient = async (req, res) => {
 
     updateData.MacAddress = normalizedMacAddress;
     updateData.Status = nextIsDisconnectedPlan ? "DISCONNECTED" : "ACTIVE";
+    updateData.UpdatedBy = actor.display || "";
+    updateData.UpdatedById = actor.id || "";
+    updateData.LastUpdatedBy = actor.display || "";
+    updateData.updatedAt = new Date();
     const nextMacAddressUpper = String(normalizedMacAddress || "").trim().toUpperCase();
     const nextMacAddress = normalizedMacAddress;
 
@@ -564,7 +590,8 @@ exports.updateClient = async (req, res) => {
         oldDueDate: oldClient.DueDate || "",
         nextDueDate: nextDueDate || "",
         authMode: nextAuthMode,
-        amountDue: nextAmountDue
+        amountDue: nextAmountDue,
+        updatedBy: actor.display || ""
       });
 
       // REMOVE OLD/CURRENT scheduler names so MikroTik cleanup follows AccountName changes
@@ -664,6 +691,7 @@ exports.adjustClientDueDate = async (req, res) => {
     const id = req.params.id;
     const dueDate = req.body.DueDate;
     const subscriptionCover = req.body.SubscriptionCover;
+    const actor = getRequestActor(req);
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid client id." });
@@ -691,6 +719,9 @@ exports.adjustClientDueDate = async (req, res) => {
             DueDate: dueDate,
             SubscriptionCover:
               subscriptionCover || String(new Date(dueDate).getDate()),
+            UpdatedBy: actor.display || "",
+            UpdatedById: actor.id || "",
+            LastUpdatedBy: actor.display || "",
             updatedAt: new Date()
           }
         }
@@ -705,6 +736,16 @@ exports.adjustClientDueDate = async (req, res) => {
     const amountDue = parseAmountValue(existingClient.AmountDue);
     const accountName = existingClient.AccountName || "";
     const serverLocation = existingClient.ServerLocation;
+
+    console.log("CLIENT DUE-DATE SCHEDULER TARGET:", {
+      clientId: id,
+      accountName,
+      previousDueDate: existingClient.DueDate || "",
+      nextDueDate: dueDate || "",
+      authMode,
+      amountDue,
+      updatedBy: actor.display || ""
+    });
 
     await removeScheduler({
       username: accountName,
