@@ -3,4 +3,5 @@ node_modules/
 .env.*
 certs/qz-private-key.pem
 uploads/
+migration/olt-dumps/
 npm-debug.log*
