@@ -388,6 +388,16 @@ exports.updateClient = async (req, res) => {
       nextProfileValue,
       nextNetPlanValue
     );
+    const oldIsDisconnectedPlan = isDisconnectedPlanValue(
+      oldProfileValue,
+      oldNetPlanValue,
+      oldClient.Status
+    );
+    const passwordChanged =
+      updateData.Password !== undefined && updateData.Password !== oldClient.Password;
+    const serverLocationChanged =
+      updateData.ServerLocation !== undefined &&
+      updateData.ServerLocation !== oldClient.ServerLocation;
     const pullOutCommentMatch = String(updateData.Note || "")
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -452,24 +462,43 @@ exports.updateClient = async (req, res) => {
         );
         console.log("=== CLIENT CONTROLLER PPP -> IPOE DONE ===");
       } else if (nextAuthMode === "PPPOE") {
-      console.log("=== CLIENT CONTROLLER PPP UPDATE CALL ===");
-      console.log("PPP UPDATE ACCOUNT:", updateData.AccountName || oldClient.AccountName);
-      console.log("PPP UPDATE PROFILE:", updateData.Profile || oldClient.Profile);
       const shouldRefreshOverduePppoeSession =
         !nextIsDisconnectedPlan &&
         isDuePastDisconnectGrace(
           oldClient.DueDate,
           await getDisconnectAfterDueDays()
         );
+      const shouldUpdatePppoeSecret =
+        oldAuthMode !== "PPPOE" ||
+        oldClient.AccountName !== nextAccountName ||
+        oldProfileValue !== nextProfileValue ||
+        oldNetPlanValue !== nextNetPlanValue ||
+        passwordChanged ||
+        serverLocationChanged ||
+        oldIsDisconnectedPlan !== nextIsDisconnectedPlan;
 
-        await updatePPPoEUser({
-          oldUsername: oldClient.AccountName,
-          username: updateData.AccountName,
-          password: updateData.Password,
-          profile: updateData.Profile,
-          location: updateData.ServerLocation || oldClient.ServerLocation,
-          disconnectRemark: nextIsDisconnectedPlan ? pppoeDisconnectRemark : ""
-        });
+        if (shouldUpdatePppoeSecret) {
+          console.log("=== CLIENT CONTROLLER PPP UPDATE CALL ===");
+          console.log("PPP UPDATE CLIENT ID:", id);
+          console.log("PPP UPDATE ACCOUNT:", nextAccountName);
+          console.log("PPP UPDATE PROFILE:", nextProfileValue);
+
+          await updatePPPoEUser({
+            oldUsername: oldClient.AccountName,
+            username: nextAccountName,
+            password: updateData.Password || oldClient.Password || "",
+            profile: nextProfileValue,
+            location: updateData.ServerLocation || oldClient.ServerLocation,
+            disconnectRemark: nextIsDisconnectedPlan ? pppoeDisconnectRemark : ""
+          });
+          console.log("=== CLIENT CONTROLLER PPP UPDATE DONE ===");
+        } else {
+          console.log("=== CLIENT CONTROLLER PPP UPDATE SKIPPED ===");
+          console.log("PPP UPDATE SKIP CLIENT ID:", id);
+          console.log("PPP UPDATE SKIP ACCOUNT:", nextAccountName);
+          console.log("PPP UPDATE SKIP REASON: billing/due-date only");
+        }
+
         if (nextIsDisconnectedPlan) {
           await disconnectPPPoEUser(
             nextAccountName,
@@ -481,7 +510,6 @@ exports.updateClient = async (req, res) => {
             updateData.ServerLocation || oldClient.ServerLocation
           );
         }
-        console.log("=== CLIENT CONTROLLER PPP UPDATE DONE ===");
       }
 
     if (oldAuthMode === "IPOE" && oldMacAddress && oldMacAddress !== nextMacAddressUpper) {
@@ -529,6 +557,15 @@ exports.updateClient = async (req, res) => {
 
     if (schedulerNeedsRefresh || shouldForceRemoveDisconnectedScheduler) {
       console.log("📅 Scheduler details changed → updating scheduler");
+      console.log("PAYMENT/CLIENT SCHEDULER TARGET:", {
+        clientId: id,
+        oldAccountName: oldClient.AccountName || "",
+        nextAccountName: nextAccountName || "",
+        oldDueDate: oldClient.DueDate || "",
+        nextDueDate: nextDueDate || "",
+        authMode: nextAuthMode,
+        amountDue: nextAmountDue
+      });
 
       // REMOVE OLD/CURRENT scheduler names so MikroTik cleanup follows AccountName changes
       const schedulerNamesToRemove = [
