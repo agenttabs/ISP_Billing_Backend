@@ -389,12 +389,24 @@ exports.updateClient = async (req, res) => {
 
     const actor = getRequestActor(req);
     const { _id, ...updateData } = req.body;
+    const isPaymentClientUpdate =
+      updateData.PaymentStatus !== undefined ||
+      updateData.PaymentDate !== undefined ||
+      updateData.AmountPaid !== undefined ||
+      updateData.CashAmount !== undefined ||
+      updateData.GCashAmount !== undefined ||
+      updateData.Balance !== undefined;
+    const forcePppoeSecretUpdate =
+      Boolean(updateData.ForcePppoeSecretUpdate) || !isPaymentClientUpdate;
+    delete updateData.ForcePppoeSecretUpdate;
     console.log("CLIENT UPDATE REQUEST TARGET:", {
       routeClientId: id,
       bodyClientId: bodyId || "",
       dbAccountName: oldClient.AccountName || "",
       bodyAccountName: updateData.AccountName || "",
-      updatedBy: actor.display || ""
+      updatedBy: actor.display || "",
+      isPaymentClientUpdate,
+      forcePppoeSecretUpdate
     });
     delete updateData.CreatedBy;
     delete updateData.CreatedById;
@@ -520,13 +532,16 @@ exports.updateClient = async (req, res) => {
         oldNetPlanValue !== nextNetPlanValue ||
         passwordChanged ||
         serverLocationChanged ||
-        oldIsDisconnectedPlan !== nextIsDisconnectedPlan;
+        oldIsDisconnectedPlan !== nextIsDisconnectedPlan ||
+        shouldRefreshOverduePppoeSession ||
+        forcePppoeSecretUpdate;
 
         if (shouldUpdatePppoeSecret) {
           console.log("=== CLIENT CONTROLLER PPP UPDATE CALL ===");
           console.log("PPP UPDATE CLIENT ID:", id);
           console.log("PPP UPDATE ACCOUNT:", nextAccountName);
           console.log("PPP UPDATE PROFILE:", nextProfileValue);
+          console.log("PPP UPDATE FORCE:", forcePppoeSecretUpdate);
 
           await updatePPPoEUser({
             oldUsername: oldClient.AccountName,
@@ -541,7 +556,7 @@ exports.updateClient = async (req, res) => {
           console.log("=== CLIENT CONTROLLER PPP UPDATE SKIPPED ===");
           console.log("PPP UPDATE SKIP CLIENT ID:", id);
           console.log("PPP UPDATE SKIP ACCOUNT:", nextAccountName);
-          console.log("PPP UPDATE SKIP REASON: billing/due-date only");
+          console.log("PPP UPDATE SKIP REASON: billing/due-date only and not over disconnect grace");
         }
 
         if (nextIsDisconnectedPlan) {
