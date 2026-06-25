@@ -67,6 +67,25 @@ const getManilaDayUtcRange = (date = new Date()) => {
   return { start, end };
 };
 
+const buildDueDateOffsetFilter = (targetDueDate) => {
+  const targetKey = getManilaDateKey(targetDueDate);
+  const [year, month, day] = targetKey.split("-").map(Number);
+  const { start, end } = getManilaDayUtcRange(targetDueDate);
+  const slashDate = `${String(month).padStart(2, "0")}/${String(day).padStart(
+    2,
+    "0"
+  )}/${year}`;
+
+  return {
+    $or: [
+      { DueDate: { $gte: start, $lt: end } },
+      { DueDate: targetKey },
+      { DueDate: slashDate },
+      { DueDate: { $regex: new RegExp(`^${targetKey}`) } }
+    ]
+  };
+};
+
 const getMinutesFromTimeKey = (value) => {
   const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
 
@@ -104,7 +123,11 @@ const isUnpaidClient = (client) => {
   const paymentStatus = String(client?.PaymentStatus || "").trim().toUpperCase();
   const amountDue = Number(client?.AmountDue ?? client?.amountDue ?? 0);
 
-  if (paymentStatus && paymentStatus !== "PAID") {
+  if (paymentStatus === "PAID") {
+    return false;
+  }
+
+  if (paymentStatus) {
     return true;
   }
 
@@ -195,55 +218,15 @@ const buildTemplateValues = (client) => {
   };
 };
 
-const filterProgramRecipients = (program, clients = []) => {
-  const todayKey = getManilaDateKey();
+const getProgramRecipientResult = async (program) => {
   const daysOffset = Number(program?.DaysOffset || 0);
-
-  return clients.filter((client) => {
-    if (!hasContactNumber(client)) return false;
-    if (isDisconnectedClient(client)) return false;
-    if (!isUnpaidClient(client)) return false;
-
-    const dueDate = client?.DueDate ? new Date(client.DueDate) : null;
-    if (!dueDate || Number.isNaN(dueDate.getTime())) {
-      return false;
-    }
-
-    const scheduledDate = addDays(dueDate, daysOffset);
-    return getManilaDateKey(scheduledDate) === todayKey;
-  });
-};
-
-const getProgramRecipients = async (program) => {
-  const daysOffset = Number(program?.DaysOffset || 0);
-  const targetDueDate = addDays(new Date(), -daysOffset);
-  const { start, end } = getManilaDayUtcRange(targetDueDate);
+  const targetDueDateKey = getManilaDateKey(addDays(new Date(), daysOffset));
+  const targetDueDate = addDays(new Date(), daysOffset);
+  const dueDateFilter = buildDueDateOffsetFilter(targetDueDate);
   const clients = await mongoose.connection.db
     .collection(collections.clients)
     .find(
-      {
-        DueDate: { $gte: start, $lt: end },
-        $or: [
-          { ContactNumber: { $exists: true, $nin: ["", null] } },
-          { Mobile: { $exists: true, $nin: ["", null] } },
-          { Phone: { $exists: true, $nin: ["", null] } }
-        ],
-        $and: [
-          {
-            $or: [
-              { PaymentStatus: { $exists: false } },
-              { PaymentStatus: { $not: /^PAID$/i } },
-              { AmountDue: { $gt: 0 } },
-              { amountDue: { $gt: 0 } }
-            ]
-          }
-        ],
-        $nor: [
-          { Profile: /DISCONNECTION|DISCONNECTED|^DC-PUTOL$|^0M\/0M$/i },
-          { NetPlan: /DISCONNECTION|DISCONNECTED|^DC-PUTOL$|^0M\/0M$/i },
-          { Status: /DISCONNECTION|DISCONNECTED|^DC-PUTOL$|^0M\/0M$/i }
-        ]
-      },
+      dueDateFilter,
       {
         projection: {
           ClientName: 1,
@@ -265,7 +248,40 @@ const getProgramRecipients = async (program) => {
     )
     .toArray();
 
-  return filterProgramRecipients(program, clients);
+  const stats = {
+    totalDueDateMatches: clients.length,
+    eligibleRecipients: 0,
+    skippedDisconnected: 0,
+    skippedInvalidDueDate: 0
+  };
+
+  const recipients = clients.filter((client) => {
+    if (isDisconnectedClient(client)) {
+      stats.skippedDisconnected += 1;
+      return false;
+    }
+
+    const dueDate = client?.DueDate ? new Date(client.DueDate) : null;
+    if (!dueDate || Number.isNaN(dueDate.getTime())) {
+      stats.skippedInvalidDueDate += 1;
+      return false;
+    }
+
+    return getManilaDateKey(dueDate) === targetDueDateKey;
+  });
+
+  stats.eligibleRecipients = recipients.length;
+
+  return {
+    targetDueDate: targetDueDateKey,
+    recipients,
+    stats
+  };
+};
+
+const getProgramRecipients = async (program) => {
+  const result = await getProgramRecipientResult(program);
+  return result.recipients;
 };
 
 const updateProgramRunSummary = async (programId, values = {}) => {
@@ -313,14 +329,14 @@ const executeSmsBatchProgram = async ({ program, action, req = null }) => {
   }
 
   const now = new Date();
-  const summary = `Sent ${sent} SMS, skipped ${skipped} SMS.`;
+  const summary = `Success ${sent} SMS, failed ${skipped} SMS.`;
   const status = skipped > 0 && sent === 0 ? "FAILED" : "SUCCESS";
 
   await updateProgramRunSummary(program._id, {
     LastRunKey: getManilaDateKey(now),
     LastRunAt: now,
     LastRunSummary: summary,
-    LastError: errors.length ? errors.slice(0, 5).join(" | ") : ""
+    LastError: ""
   });
 
   await writeAuditLog({
@@ -532,9 +548,11 @@ exports.getSmsBatchProgramRecipients = async (req, res) => {
     }
 
     const recipients = await getProgramRecipients(program);
+    const targetDueDate = addDays(new Date(), Number(program.DaysOffset || 0));
 
     res.json({
       program: sanitizeBatchProgram(program),
+      targetDueDate: getManilaDateKey(targetDueDate),
       totalRecipients: recipients.length,
       recipients: recipients.map(formatRecipientRow)
     });

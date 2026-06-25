@@ -120,6 +120,22 @@ const isDuePastDisconnectGrace = (dueDateValue, graceDays) => {
   return disconnectDate.getTime() <= getManilaTodayStart().getTime();
 };
 
+const getPastDueSchedulerOverride = (dueDateValue, graceDays, enabled) => {
+  if (!enabled) return null;
+
+  const dueDate = parseDateOnlyUtc(dueDateValue);
+  if (!dueDate) return null;
+
+  const normalTriggerDate = addDaysUtc(dueDate, graceDays);
+  const now = new Date();
+  if (normalTriggerDate.getTime() > now.getTime()) return null;
+
+  return {
+    normalTriggerDate,
+    overrideDate: new Date(now.getTime() + 60 * 60 * 1000)
+  };
+};
+
 const buildDisconnectedClientFilter = () => ({
   $or: [
     { Status: { $regex: /DISCONNECTED/i } },
@@ -754,6 +770,7 @@ exports.adjustClientDueDate = async (req, res) => {
     }
     const dueDate = req.body.DueDate;
     const subscriptionCover = req.body.SubscriptionCover;
+    const schedulePastDueOneHour = Boolean(req.body.SchedulePastDueOneHour);
     const actor = getRequestActor(req);
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -799,6 +816,12 @@ exports.adjustClientDueDate = async (req, res) => {
     const amountDue = parseAmountValue(existingClient.AmountDue);
     const accountName = existingClient.AccountName || "";
     const serverLocation = existingClient.ServerLocation;
+    const disconnectAfterDueDays = await getDisconnectAfterDueDays();
+    const schedulerOverride = getPastDueSchedulerOverride(
+      dueDate,
+      disconnectAfterDueDays,
+      schedulePastDueOneHour
+    );
 
     console.log("CLIENT DUE-DATE SCHEDULER TARGET:", {
       clientId: id,
@@ -807,7 +830,10 @@ exports.adjustClientDueDate = async (req, res) => {
       nextDueDate: dueDate || "",
       authMode,
       amountDue,
-      updatedBy: actor.display || ""
+      updatedBy: actor.display || "",
+      schedulePastDueOneHour,
+      normalTriggerDate: schedulerOverride?.normalTriggerDate || "",
+      overrideTriggerDate: schedulerOverride?.overrideDate || ""
     });
 
     console.log("MIKROTIK DUE-DATE SCHEDULER REMOVE TARGET:", {
@@ -834,13 +860,15 @@ exports.adjustClientDueDate = async (req, res) => {
             username: accountName,
             dueDate,
             macAddress,
-            updatedBy: actor.display || ""
+            updatedBy: actor.display || "",
+            triggerDateOverride: schedulerOverride?.overrideDate || ""
           });
           await addIpoeDisconnectScheduler({
             username: accountName,
             dueDate,
             macAddress,
-            location: serverLocation
+            location: serverLocation,
+            triggerDateOverride: schedulerOverride?.overrideDate
           });
         }
       } else if (authMode === "PPPOE") {
@@ -848,12 +876,14 @@ exports.adjustClientDueDate = async (req, res) => {
           clientId: id,
           username: accountName,
           dueDate,
-          updatedBy: actor.display || ""
+          updatedBy: actor.display || "",
+          triggerDateOverride: schedulerOverride?.overrideDate || ""
         });
         await addDisconnectScheduler({
           username: accountName,
           dueDate,
-          location: serverLocation
+          location: serverLocation,
+          triggerDateOverride: schedulerOverride?.overrideDate
         });
       }
     }

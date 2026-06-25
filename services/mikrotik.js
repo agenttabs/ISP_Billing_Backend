@@ -327,15 +327,30 @@ const formatMikrotikDate = (date) => {
     };
 };
 
+const formatMikrotikDateTime = (date) => {
+    const months = [
+        "jan", "feb", "mar", "apr", "may", "jun",
+        "jul", "aug", "sep", "oct", "nov", "dec"
+    ];
+    const d = new Date(date);
+
+    return {
+        date: `${months[d.getMonth()]}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`,
+        time: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`
+    };
+};
+
 // ✅ MAIN FUNCTION
-const addDisconnectScheduler = async ({ username, dueDate, location }) => {
+const addDisconnectScheduler = async ({ username, dueDate, location, triggerDateOverride }) => {
     if (!username || !dueDate) {
         throw new Error("Missing username or dueDate");
     }
 
     const graceDays = await getDisconnectAfterDueDays();
-    const triggerDate = addDays(dueDate, graceDays);
-    const { date, time } = formatMikrotikDate(triggerDate);
+    const triggerDate = triggerDateOverride ? new Date(triggerDateOverride) : addDays(dueDate, graceDays);
+    const { date, time } = triggerDateOverride
+        ? formatMikrotikDateTime(triggerDate)
+        : formatMikrotikDate(triggerDate);
 
     const server = await getMikrotikConfigAC();
 
@@ -1260,14 +1275,16 @@ const getClientMikrotikStatus = async ({
     }
 };
 
-const addIpoeDisconnectScheduler = async ({ username, dueDate, macAddress, location }) => {
+const addIpoeDisconnectScheduler = async ({ username, dueDate, macAddress, location, triggerDateOverride }) => {
     if (!username || !dueDate || !macAddress) {
         throw new Error("Missing username, dueDate, or macAddress");
     }
 
     const graceDays = await getDisconnectAfterDueDays();
-    const triggerDate = addDays(dueDate, graceDays);
-    const { date, time } = formatMikrotikDate(triggerDate);
+    const triggerDate = triggerDateOverride ? new Date(triggerDateOverride) : addDays(dueDate, graceDays);
+    const { date, time } = triggerDateOverride
+        ? formatMikrotikDateTime(triggerDate)
+        : formatMikrotikDate(triggerDate);
     const server = await getMikrotikConfigAC();
 
     const client = new RouterOSClient({
