@@ -444,6 +444,11 @@ const addDaysUtc = (date, days) => {
   return next;
 };
 
+const getDateOnlyKey = (value) => {
+  const date = parseDateOnly(value);
+  return date ? date.toISOString().slice(0, 10) : "";
+};
+
 const getManilaTodayStart = () => {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -604,6 +609,16 @@ const getDashboardQualifiedClients = (clients = []) =>
     }
 
     return !isClientPlanDisconnected(client) && isUnpaidClient(client) && parseDateOnly(client?.DueDate);
+  });
+
+const getPullOutReportClients = (clients = []) =>
+  clients.filter((client) => {
+    const authMode = String(client?.AuthenticationMode || "").trim().toUpperCase();
+    if (authMode !== "PPPOE" && authMode !== "IPOE") {
+      return false;
+    }
+
+    return Boolean(parseDateOnly(client?.DueDate));
   });
 
 const getDueTodayRows = (clients = [], graceDays = 15) => {
@@ -1513,10 +1528,14 @@ exports.getPullOutReport = async (req, res) => {
   try {
     const requestedDays = Number(req.query.days || 30);
     const overdueDays =
-      Number.isFinite(requestedDays) && requestedDays >= 0
-        ? Math.floor(requestedDays)
+      Number.isFinite(requestedDays)
+        ? Math.abs(Math.floor(requestedDays))
         : 30;
-    const todayStart = getManilaTodayStart();
+    const selectedAsOfDate = parseDateOnly(req.query.asOfDate);
+    const todayStart = selectedAsOfDate || getManilaTodayStart();
+    const targetDueDate = addDaysUtc(todayStart, -(overdueDays + 1));
+    const targetDueDateKey = targetDueDate.toISOString().slice(0, 10);
+    const asOfDateKey = todayStart.toISOString().slice(0, 10);
 
     const [clients, bypassRows] = await Promise.all([
       mongoose.connection.db
@@ -1529,18 +1548,22 @@ exports.getPullOutReport = async (req, res) => {
         .toArray()
     ]);
 
-    const rows = getDashboardQualifiedClients(
+    const rows = getPullOutReportClients(
       excludeBypassDashboardClients(clients, bypassRows)
     )
+      .filter((client) => {
+        const dueDateKey = getDateOnlyKey(client?.DueDate);
+        return dueDateKey >= targetDueDateKey && dueDateKey <= asOfDateKey;
+      })
       .map((client) => {
         const dueDate = parseDateOnly(client?.DueDate);
         const daysPastDue = dueDate
           ? Math.max(
               0,
-              Math.floor((todayStart.getTime() - dueDate.getTime()) / (24 * 60 * 60 * 1000))
+              Math.floor((todayStart.getTime() - dueDate.getTime()) / (24 * 60 * 60 * 1000)) - 1
             )
           : 0;
-        const eligibleDate = dueDate ? addDaysUtc(dueDate, overdueDays) : null;
+        const eligibleDate = dueDate ? addDaysUtc(dueDate, overdueDays + 1) : null;
 
         return {
           clientId: String(client?._id || "").trim(),
@@ -1558,8 +1581,11 @@ exports.getPullOutReport = async (req, res) => {
           address: client?.Address || "-"
         };
       })
-      .filter((row) => row.daysPastDue >= overdueDays)
-      .sort((a, b) => b.daysPastDue - a.daysPastDue || a.accountName.localeCompare(b.accountName));
+      .sort((a, b) =>
+        String(a.accountName || "").localeCompare(String(b.accountName || ""), undefined, {
+          sensitivity: "base"
+        })
+      );
 
     await writeAuditLog({
       req,
@@ -1570,6 +1596,8 @@ exports.getPullOutReport = async (req, res) => {
       summary: "Pull out report generated.",
       details: {
         overdueDays,
+        targetDueDate: targetDueDateKey,
+        asOfDate: asOfDateKey,
         rowCount: rows.length
       }
     });
@@ -1577,7 +1605,8 @@ exports.getPullOutReport = async (req, res) => {
     res.json({
       summary: {
         overdueDays,
-        asOfDate: todayStart.toISOString().slice(0, 10),
+        asOfDate: asOfDateKey,
+        targetDueDate: targetDueDateKey,
         rowCount: rows.length
       },
       rows
